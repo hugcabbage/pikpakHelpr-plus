@@ -48,6 +48,7 @@
         <div class="btn el-button el-button--secondary" @click="openConfig">配置aria2</div>
         <div class="btn el-button el-button--primary" @click="pushBefore">推送到aria2</div>
       </div>
+      <div class="btn el-button el-button--success" style="margin-right: 10px;" @click="copyOriginLinks">复制原画链接</div>
     </div>
   </div>
 </template>
@@ -411,6 +412,58 @@ const push = async () => {
       .finally(() => {
         testIndex++
       })
+  }
+}
+
+// 复制原画链接功能
+const copyOriginLinks = async () => {
+  if (selected.value.length === 0) {
+    emits('msg', '请先选择要复制的文件')
+    return
+  }
+  emits('msg', '开始获取原画链接')
+  let copiedList = []
+  let failCount = 0
+  let errorMSG = ''
+  let total = selected.value.length
+  let testIndex = 0
+  for (let index of selected.value) {
+    const item = list.value[index]
+    try {
+      // 获取文件详情
+      // 复用 getDownload
+      // eslint-disable-next-line no-await-in-loop
+      const res = await getDownload(item.id)
+      if (res.error_description) {
+        emits('msg', `失败原因: ${res.error_description} 请刷新！`)
+        failCount++
+        continue
+      }
+      // 查找原画链接
+      let originMedia = (res.medias || []).find(m => m.media_name === '原画' && m.link && m.link.url)
+      if (!originMedia) {
+        emits('msg', `第${testIndex + 1}个项目未找到原画链接`)
+        failCount++
+        continue
+      }
+      copiedList.push(`${res.name}$${originMedia.link.url}`)
+      emits('msg', `第${testIndex + 1}个项目原画链接获取成功`)
+    } catch (e) {
+      emits('msg', `第${testIndex + 1}个项目原画链接获取失败`)
+      failCount++
+    } finally {
+      testIndex++
+    }
+  }
+  if (copiedList.length > 0) {
+    try {
+      await navigator.clipboard.writeText(copiedList.join('\n'))
+      emits('msg', `已复制${copiedList.length}个原画链接到剪切板${failCount > 0 ? `，失败${failCount}个` : ''}`)
+    } catch (e) {
+      emits('msg', '复制到剪切板失败，请手动复制')
+    }
+  } else {
+    emits('msg', '未能获取到任何原画链接')
   }
 }
 </script>
@@ -927,5 +980,11 @@ const push = async () => {
     transform: scale(1);
     opacity: 1;
   }
+}
+
+.btn.el-button--success {
+  background: #67c23a;
+  color: #fff;
+  border: none;
 }
 </style>
