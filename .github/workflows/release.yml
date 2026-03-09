@@ -1,0 +1,45 @@
+name: Build & Release userscript
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: yarn install
+
+      - name: Build userscript
+        run: yarn build
+
+      - name: List dist
+        run: ls -la dist || true
+
+      - name: Get version from package.json
+        id: get_version
+        run: |
+          version=$(node -e "console.log(require('./package.json').version)")
+          echo "version=v$version" >> $GITHUB_OUTPUT
+
+      - name: Release userscript
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.get_version.outputs.version }}
+          name: ${{ steps.get_version.outputs.version }}
+          artifacts: dist/*.user.js
+          allowUpdates: true
