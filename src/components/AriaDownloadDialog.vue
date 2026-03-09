@@ -47,8 +47,8 @@
       <div class="footer">
         <div class="btn el-button el-button--secondary" @click="openConfig">配置aria2</div>
         <div class="btn el-button el-button--primary" @click="pushBefore">推送到aria2</div>
+        <div class="btn el-button el-button--primary" @click="copyOriginLinks">复制原画链接</div>
       </div>
-      <div class="btn el-button el-button--success" style="margin-right: 10px;" @click="copyOriginLinks">复制原画链接</div>
     </div>
   </div>
 </template>
@@ -982,9 +982,4 @@ const copyOriginLinks = async () => {
   }
 }
 
-.btn.el-button--success {
-  background: #67c23a;
-  color: #fff;
-  border: none;
-}
 </style>
