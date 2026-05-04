@@ -54,7 +54,7 @@
 
 <script setup>
 import { ref, watch, computed, onMounted } from 'vue'
-import { getDownload, pushToAria, getList } from '../api'
+import { getDownload, pushToAria, getList, isSharePage, getShareCurrentFiles, getShareId, getSharePageData, fetchShareFiles, getShareFolderDetail } from '../api'
 
 const props = defineProps({
   show: Boolean
@@ -66,6 +66,10 @@ const selected = ref([])
 const checkedAll = ref(false)
 const selectedItems = ref([]) // 选中的项目
 const isForbidden = ref(false) // 按钮是否禁用，防抖
+
+// 分享页相关状态
+const shareId = ref('')
+const passCodeToken = ref('')
 
 const sortBy = ref('name') // Default sort by name
 const sortDirection = ref('asc') // Default sort direction
@@ -88,28 +92,60 @@ const connectionStatus = computed(() => {
   }
 })
 
+// 构建文件列表项
+const buildFileItem = (item) => ({
+  id: item.id,
+  name: item.name,
+  type: item.kind,
+  created_time: item.created_time,
+  modified_time: item.modified_time,
+  size: item.size,
+  file_category: item.file_category
+})
+
 watch(
   () => props.show,
   (val) => {
     if (val) {
-      const tempList = []
-      let parent_id = window.location.href.split('/').pop()
-      if (parent_id == 'all') parent_id = ''
-      emits('msg', '开始加载文件列表，请稍等', 'info')
-      getList(parent_id).then(res => {
-        res.files.forEach(item => {
-          tempList.push({ id: item.id, name: item.name, type: item.kind, created_time: item.created_time, modified_time: item.modified_time, size: item.size, file_category: item.file_category })
+      list.value = []
+
+      if (isSharePage()) {
+        // 分享页：从 Pinia store 获取当前目录文件列表
+        shareId.value = getShareId()
+        const data = getSharePageData()
+        passCodeToken.value = data?.data?.pass_code_token || ''
+
+        emits('msg', '正在加载分享文件列表...', 'info')
+
+        // 异步加载：首次加载用 Pinia store，页面内跳转后用 API 直接获取
+        const loadShareFiles = async (retries = 5) => {
+          const shareFiles = await getShareCurrentFiles()
+          if (shareFiles.files.length > 0 || retries <= 0) {
+            console.log('[pikpakHelpr] loadShareFiles: got', shareFiles.files.length, 'files, retries left:', retries)
+            list.value = shareFiles.files.map(buildFileItem)
+            sortList()
+            emits('msg', `文件列表加载完成，共 ${list.value.length} 项`, 'success')
+          } else {
+            console.log('[pikpakHelpr] loadShareFiles: retrying...', retries)
+            setTimeout(() => loadShareFiles(retries - 1), 500)
+          }
+        }
+        loadShareFiles()
+      } else {
+        // 普通页面：原有逻辑
+        let parent_id = window.location.href.split('/').pop()
+        if (parent_id == 'all') parent_id = ''
+        emits('msg', '开始加载文件列表，请稍等', 'info')
+        getList(parent_id).then(res => {
+          list.value = res.files.map(buildFileItem)
+          sortList() // Apply default sort after loading
+        }).finally(() => {
+          emits('msg', '文件列表加载完成', 'success')
         })
-        list.value = tempList
-        sortList(); // Apply default sort after loading
-      }).finally(() => {
-        emits('msg', '文件列表加载完成', 'success')
-      })
-      
+      }
+
       // 对话框打开时检测aria2连接状态
-      setTimeout(() => {
-        testConnection()
-      }, 500)
+      setTimeout(testConnection, 500)
     }
   }
 )
@@ -152,7 +188,6 @@ const testConnection = async () => {
     const response = await pushToAria(host, payload)
     if (response && response.result) {
       connectionState.value = 'connected'
-      // emits('msg', 'Aria2连接测试成功', 'success')
     } else {
       connectionState.value = 'disconnected'
       emits('msg', 'Aria2连接失败，请检查配置', 'error')
@@ -166,12 +201,7 @@ const testConnection = async () => {
 }
 
 // 组件挂载时检查连接
-onMounted(() => {
-  // 延迟检查连接，避免与文件列表加载冲突
-  setTimeout(() => {
-    testConnection()
-  }, 1000)
-})
+onMounted(() => setTimeout(testConnection, 1000))
 
 // 选择
 const onCheckAll = () => {
@@ -207,14 +237,8 @@ const sortList = () => {
       bValue = new Date(bValue).getTime();
     }
 
-    let comparison = 0;
-    if (aValue > bValue) {
-      comparison = 1;
-    } else if (aValue < bValue) {
-      comparison = -1;
-    }
-
-    return sortDirection.value === 'asc' ? comparison : -comparison;
+    const comparison = aValue > bValue ? 1 : aValue < bValue ? -1 : 0
+    return sortDirection.value === 'asc' ? comparison : -comparison
   });
   // After sorting, re-select items to maintain checked state
   updateSelectedIndices();
@@ -284,7 +308,32 @@ const getAllList = async () => {
     processedCount++;
     emits('msg', `正在扫描第 ${processedCount} 个文件夹: ${currentFolder.name}`, 'info');
     try {
-      const result = await getList(currentFolder.id);
+      let result = null;
+
+      if (isSharePage()) {
+        // 分享页：优先从 Pinia store 的 detail 缓存读取
+        const detail = getShareFolderDetail(currentFolder.id)
+        if (detail && detail.files) {
+          result = detail
+        } else {
+          // 缓存未命中，调用 API 直接获取
+          console.log('[pikpakHelpr] getAllList: cache miss for', currentFolder.name, 'calling API')
+          try {
+            result = await fetchShareFiles(shareId.value, currentFolder.id, passCodeToken.value)
+            if (!result || !result.files || result.files.length === 0) {
+              emits('msg', `文件夹 "${currentFolder.name}" 内容为空`, 'warning')
+              continue
+            }
+          } catch (e) {
+            console.error('[pikpakHelpr] getAllList: API call failed for', currentFolder.name, e)
+            emits('msg', `获取文件夹 "${currentFolder.name}" 内容失败: ${e.message || '网络错误'}`, 'error')
+            continue
+          }
+        }
+      } else {
+        result = await getList(currentFolder.id);
+      }
+
       if (result.files) {
         for (const file of result.files) {
           if (file.kind === 'drive#folder') {
@@ -308,11 +357,12 @@ const pushBefore = async () => {
   if (!isForbidden.value) {
     isForbidden.value = true
     await getAllList()
+    
+    // 直接推送
     push()
   } else {
     emits('msg', '已经开始推送了', 'warning')
   }
-
 }
 
 
@@ -326,91 +376,116 @@ const push = async () => {
   let ariaParams = window.localStorage.getItem('ariaParams') || ''
   let errorMSG = ''
   let retryList = [] // 重试列表
+  
   if (!ariaHost) {
     emits('msg', '请先配置aria2', 'error')
     close()
     return
   }
-  console.log(`共${selectedItems.value.length}个项目`);
-  let testIndex = 0
-  for (let item of selectedItems.value) {
-    getDownload(item.id).then((res) => {
-
-      if (res.error_description) {
-        emits('msg', `失败原因: ${res.error_description} 请刷新！`, 'error')
-        return
-      }
-      emits('msg', `第${testIndex + 1}个项目下载链接获取成功`, 'success')
-      console.log(`第${testIndex + 1}个项目下载链接获取成功`);
-      let ariaData = {
-        id: new Date().getTime(),
-        jsonrpc: '2.0',
-        method: 'aria2.addUri',
-        params: [
-          [res.web_content_link],
-          { out: res.name }
-        ]
-      }
-      if (ariaPath) {
-        // 拼接路径
-        ariaData.params[1].dir = ariaPath + (item.path || '')
-      }
-      if (ariaParams) {
-        const customParams = ariaParams.split(';')
-        customParams.forEach(item => {
-          const customParam = item.split('=')
-          ariaData.params[1][customParam[0]] = customParam[1]
-        })
-      }
-      ariaToken && (ariaData.params.unshift(`token:${ariaToken}`))
-      pushToAria(ariaHost, ariaData).then((ariares) => {
+  
+  console.log(`[pikpakHelpr] 共${selectedItems.value.length}个项目`);
+  
+  // 并发处理，限制同时进行的请求数量
+  const MAX_CONCURRENT = 5
+  const items = [...selectedItems.value]
+  let currentIndex = 0
+  
+  const processOne = async () => {
+    while (currentIndex < items.length) {
+      const i = currentIndex++
+      const item = items[i]
+      console.log(`[pikpakHelpr] 处理第${i + 1}/${items.length}个项目: ${item.name}`)
+      emits('msg', `正在处理: ${item.name}`, 'info')
+      
+      try {
+        // 获取下载链接
+        const res = await getDownload(item.id)
+        
+        if (res.error_description) {
+          console.error(`[pikpakHelpr] 第${i + 1}个项目下载链接获取失败:`, res.error_description)
+          emits('msg', `失败: ${item.name} - ${res.error_description}`, 'error')
+          fail++
+          continue
+        }
+        
+        console.log(`[pikpakHelpr] 第${i + 1}个项目下载链接获取成功:`, res.web_content_link)
+        emits('msg', `下载链接获取成功: ${item.name}`, 'success')
+        
+        // 构建 aria2 请求数据
+        let ariaData = {
+          id: new Date().getTime(),
+          jsonrpc: '2.0',
+          method: 'aria2.addUri',
+          params: [
+            [res.web_content_link],
+            { out: res.name }
+          ]
+        }
+        
+        if (ariaPath) {
+          ariaData.params[1].dir = ariaPath + (item.path || '')
+        }
+        
+        if (ariaParams) {
+          const customParams = ariaParams.split(';')
+          customParams.forEach(param => {
+            const [key, value] = param.split('=')
+            if (key && value) {
+              ariaData.params[1][key] = value
+            }
+          })
+        }
+        
+        if (ariaToken) {
+          ariaData.params.unshift(`token:${ariaToken}`)
+        }
+        
+        console.log('[pikpakHelpr] 推送到 aria2:', ariaData)
+        
+        // 推送到 aria2
+        const ariares = await pushToAria(ariaHost, ariaData)
         let resoj = ariares
+        
         // 失败时ariares为字符串类型，将其转为对象
-        if(typeof ariares === 'string'){
+        if (typeof ariares === 'string') {
           resoj = JSON.parse(ariares)
         }
+        
         if (resoj.result) {
           success++
+          console.log(`[pikpakHelpr] 推送成功: ${item.name}`)
         } else {
-          console.log(resoj);
-          console.log(ariaData);
-          errorMSG = resoj.error.message === 'Unauthorized' ? '密钥不对' : '推送失败'
+          console.error('[pikpakHelpr] 推送失败:', resoj, '请求数据:', ariaData)
+          errorMSG = resoj.error?.message === 'Unauthorized' ? '密钥不对' : (resoj.error?.message || '推送失败')
           fail++
+          emits('msg', `推送失败: ${item.name} - ${errorMSG}`, 'error')
         }
-      }).catch((e) => {
-        console.warn(e);
-        console.log(ariares);
-        console.log(ariaData);
-        errorMSG = `${e.statusText} 请检测配置`
-        emits('msg', `失败原因: ${e.statusText}`, 'error')
+        
+      } catch (e) {
+        console.error(`[pikpakHelpr] 第${i + 1}个项目处理失败:`, e)
+        emits('msg', `处理失败: ${item.name} - ${e.message || e.statusText || '未知错误'}`, 'error')
         fail++
-      }).finally(() => {
-        total--
-        if (total === 0) {
-          const resultType = fail === 0 ? 'success' : (success === 0 ? 'error' : 'warning')
-          emits('msg', `成功：${success} 失败: ${fail} ${fail !== 0 ? '失败原因：' + errorMSG : ''}`, resultType)
-          console.info(`成功：${success} 失败: ${fail} ${fail !== 0 ? '失败原因：' + errorMSG : ''}`);
-          if (retryList.length > 0) {
-            console.log(retryList);
-            emits('msg', `即将重试${retryList.length}个项目`, 'warning')
-            console.log(`即将重试${retryList.length}个项目`)
-            selectedItems.value = retryList
-            retryList = [] // 清空重试列表
-            push()
-          } else {
-            close()
-          }
-        }
-      })
-    }).catch((e) => {
-      console.warn(`第${testIndex + 1}个项目下载链接获取失败`);
-      retryList.push(selectedItems.value[testIndex])
-      fail++
-      total--
-    })
-      .finally(() => {
-        testIndex++
-      })
+        errorMSG = e.statusText ? `${e.statusText} 请检测配置` : e.message
+      }
+    }
+  }
+  
+  // 启动 MAX_CONCURRENT 个 Worker 并发处理
+  const workers = Array.from({ length: MAX_CONCURRENT }, () => processOne())
+  await Promise.all(workers)
+  
+  // 显示最终结果
+  const resultType = fail === 0 ? 'success' : (success === 0 ? 'error' : 'warning')
+  emits('msg', `推送完成 - 成功: ${success}, 失败: ${fail}${fail !== 0 ? ' (' + errorMSG + ')' : ''}`, resultType)
+  console.info(`[pikpakHelpr] 推送完成 - 成功: ${success}, 失败: ${fail}`)
+  
+  if (retryList.length > 0) {
+    emits('msg', `即将重试${retryList.length}个项目`, 'warning')
+    selectedItems.value = retryList
+    retryList = []
+    await push()
+  } else {
+    close()
   }
 }
 </script>
