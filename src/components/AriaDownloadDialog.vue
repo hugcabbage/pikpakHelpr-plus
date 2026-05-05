@@ -29,21 +29,21 @@
           <input @change="onCheck" type="checkbox" :id="item.id" :value="index" v-model="selected">
           <span class="icon">{{ item.type === 'drive#folder' ? '📁' : '📄' }}</span>
           <span class="file-name">{{ item.name }}</span>
-          <span class="file-info">{{ formatFileInfo(item) }}</span>
+          <span class="file-info">{{ formatFileInfo(item, sortBy) }}</span>
         </li>
       </ul>
-      
+
       <!-- aria2连接状态显示 -->
       <div class="connection-status">
         <div class="status-indicator">
           <div class="status-dot" :class="connectionStatus.class"></div>
           <span class="status-text">{{ connectionStatus.text }}</span>
         </div>
-        <button class="test-btn" @click="testConnection" :disabled="isTestingConnection">
+        <button class="test-btn" @click="handleTestConnection" :disabled="isTestingConnection">
           {{ isTestingConnection ? '测试中...' : '测试连接' }}
         </button>
       </div>
-      
+
       <div class="footer">
         <div class="btn el-button el-button--secondary" @click="openConfig">配置aria2</div>
         <div class="btn el-button el-button--primary" @click="pushBefore">推送到aria2</div>
@@ -53,44 +53,33 @@
 </template>
 
 <script setup>
-import { ref, watch, computed, onMounted } from 'vue'
-import { getDownload, pushToAria, getList, isSharePage, getShareCurrentFiles, getShareId, getSharePageData, fetchShareFiles, getShareFolderDetail } from '../api'
+import { ref, watch, onMounted } from 'vue'
+import { getDownload, pushToAria, getList, getShareCurrentFiles, fetchShareFiles, getShareFolderDetail } from '../api'
+import { isSharePage, getShareId, getSharePageData } from '../utils/index.js'
+import { formatFileInfo } from '../utils/format.js'
+import { getAriaConfig, buildAria2Payload } from '../utils/storage.js'
+import { useAria2Connection } from '../composables/useAria2Connection.js'
 
-const props = defineProps({
-  show: Boolean
-})
+const props = defineProps({ show: Boolean })
 const emits = defineEmits(['close', 'msg', 'openConfig'])
 
 const list = ref([])
 const selected = ref([])
 const checkedAll = ref(false)
-const selectedItems = ref([]) // 选中的项目
-const isForbidden = ref(false) // 按钮是否禁用，防抖
+const selectedItems = ref([])
+const isForbidden = ref(false)
 
-// 分享页相关状态
+// 分享页状态
 const shareId = ref('')
 const passCodeToken = ref('')
 
-const sortBy = ref('name') // Default sort by name
-const sortDirection = ref('asc') // Default sort direction
+const sortBy = ref('name')
+const sortDirection = ref('asc')
 
-// aria2连接状态管理
-const connectionState = ref('unknown') // 'unknown', 'connected', 'disconnected', 'testing'
-const isTestingConnection = ref(false)
+// Aria2 连接状态（composable）
+const { connectionStatus, isTestingConnection, testConnection } = useAria2Connection(emits)
 
-// 连接状态计算属性
-const connectionStatus = computed(() => {
-  switch (connectionState.value) {
-    case 'connected':
-      return { class: 'connected', text: 'Aria2连接正常' }
-    case 'disconnected':
-      return { class: 'disconnected', text: 'Aria2连接失败' }
-    case 'testing':
-      return { class: 'testing', text: '正在测试连接...' }
-    default:
-      return { class: 'unknown', text: 'Aria2连接状态未知' }
-  }
-})
+const handleTestConnection = () => testConnection()
 
 // 构建文件列表项
 const buildFileItem = (item) => ({
@@ -106,50 +95,41 @@ const buildFileItem = (item) => ({
 watch(
   () => props.show,
   (val) => {
-    if (val) {
-      list.value = []
+    if (!val) return
+    list.value = []
 
-      if (isSharePage()) {
-        // 分享页：从 Pinia store 获取当前目录文件列表
-        shareId.value = getShareId()
-        const data = getSharePageData()
-        passCodeToken.value = data?.data?.pass_code_token || ''
+    if (isSharePage()) {
+      shareId.value = getShareId()
+      const data = getSharePageData()
+      passCodeToken.value = data?.data?.pass_code_token || ''
+      emits('msg', '正在加载分享文件列表...', 'info')
 
-        emits('msg', '正在加载分享文件列表...', 'info')
-
-        // 异步加载：首次加载用 Pinia store，页面内跳转后用 API 直接获取
-        const loadShareFiles = async (retries = 5) => {
-          const shareFiles = await getShareCurrentFiles()
-          if (shareFiles.files.length > 0 || retries <= 0) {
-            console.log('[pikpakHelpr] loadShareFiles: got', shareFiles.files.length, 'files, retries left:', retries)
-            list.value = shareFiles.files.map(buildFileItem)
-            sortList()
-            emits('msg', `文件列表加载完成，共 ${list.value.length} 项`, 'success')
-          } else {
-            console.log('[pikpakHelpr] loadShareFiles: retrying...', retries)
-            setTimeout(() => loadShareFiles(retries - 1), 500)
-          }
+      const loadShareFiles = async (retries = 5) => {
+        const shareFiles = await getShareCurrentFiles()
+        if (shareFiles.files.length > 0 || retries <= 0) {
+          list.value = shareFiles.files.map(buildFileItem)
+          sortList()
+          emits('msg', `文件列表加载完成，共 ${list.value.length} 项`, 'success')
+        } else {
+          setTimeout(() => loadShareFiles(retries - 1), 500)
         }
-        loadShareFiles()
-      } else {
-        // 普通页面：原有逻辑
-        let parent_id = window.location.href.split('/').pop()
-        if (parent_id == 'all') parent_id = ''
-        emits('msg', '开始加载文件列表，请稍等', 'info')
-        getList(parent_id).then(res => {
-          list.value = res.files.map(buildFileItem)
-          sortList() // Apply default sort after loading
-        }).finally(() => {
-          emits('msg', '文件列表加载完成', 'success')
-        })
       }
-
-      // 对话框打开时检测aria2连接状态
-      setTimeout(testConnection, 500)
+      loadShareFiles()
+    } else {
+      let parentId = window.location.href.split('/').pop()
+      if (parentId === 'all') parentId = ''
+      emits('msg', '开始加载文件列表，请稍等', 'info')
+      getList(parentId).then(res => {
+        list.value = res.files.map(buildFileItem)
+        sortList()
+      }).finally(() => {
+        emits('msg', '文件列表加载完成', 'success')
+      })
     }
+
+    setTimeout(handleTestConnection, 500)
   }
 )
-
 
 const close = () => {
   selected.value = []
@@ -158,58 +138,11 @@ const close = () => {
   emits('close')
 }
 
-const openConfig = () => {
-  emits('openConfig')
-}
-
-// 测试aria2连接
-const testConnection = async () => {
-  if (isTestingConnection.value) return
-  
-  isTestingConnection.value = true
-  connectionState.value = 'testing'
-  
-  try {
-    const host = window.localStorage.getItem('ariaHost') || ''
-    const token = window.localStorage.getItem('ariaToken') || ''
-    
-    if (!host) {
-      throw new Error('请先配置Aria2 RPC地址')
-    }
-    
-    // 使用aria2.getVersion方法测试连接
-    const payload = {
-      jsonrpc: '2.0',
-      method: 'aria2.getVersion',
-      id: 1,
-      params: token ? [`token:${token}`] : []
-    }
-    
-    const response = await pushToAria(host, payload)
-    if (response && response.result) {
-      connectionState.value = 'connected'
-    } else {
-      connectionState.value = 'disconnected'
-      emits('msg', 'Aria2连接失败，请检查配置', 'error')
-    }
-  } catch (error) {
-    connectionState.value = 'disconnected'
-    emits('msg', `Aria2连接测试失败: ${error.message}`, 'error')
-  } finally {
-    isTestingConnection.value = false
-  }
-}
-
-// 组件挂载时检查连接
-onMounted(() => setTimeout(testConnection, 1000))
+const openConfig = () => emits('openConfig')
 
 // 选择
 const onCheckAll = () => {
-  if (checkedAll.value) {
-    selected.value = list.value.map((item, index) => index)
-  } else {
-    selected.value = []
-  }
+  selected.value = checkedAll.value ? list.value.map((_, index) => index) : []
 }
 const onCheck = () => {
   checkedAll.value = selected.value.length === list.value.length
@@ -217,415 +150,210 @@ const onCheck = () => {
 
 const sortList = () => {
   list.value.sort((a, b) => {
-    // Folders first
-    if (a.type === 'drive#folder' && b.type !== 'drive#folder') {
-      return -1;
-    }
-    if (a.type !== 'drive#folder' && b.type === 'drive#folder') {
-      return 1;
-    }
+    // 文件夹优先
+    if (a.type === 'drive#folder' && b.type !== 'drive#folder') return -1
+    if (a.type !== 'drive#folder' && b.type === 'drive#folder') return 1
 
-    // Then by selected sort option
-    let aValue = a[sortBy.value];
-    let bValue = b[sortBy.value];
+    let aValue = a[sortBy.value]
+    let bValue = b[sortBy.value]
 
     if (sortBy.value === 'size') {
-      aValue = parseInt(aValue);
-      bValue = parseInt(bValue);
+      aValue = parseInt(aValue)
+      bValue = parseInt(bValue)
     } else if (sortBy.value === 'created_time' || sortBy.value === 'modified_time') {
-      aValue = new Date(aValue).getTime();
-      bValue = new Date(bValue).getTime();
+      aValue = new Date(aValue).getTime()
+      bValue = new Date(bValue).getTime()
     }
 
     const comparison = aValue > bValue ? 1 : aValue < bValue ? -1 : 0
     return sortDirection.value === 'asc' ? comparison : -comparison
-  });
-  // After sorting, re-select items to maintain checked state
-  updateSelectedIndices();
-};
-
-const formatBytes = (bytes, decimals = 2) => {
-  if (bytes === 0) return '0 Bytes';
-
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
-
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+  })
+  updateSelectedIndices()
 }
 
-const formatFileInfo = (item) => {
-  switch (sortBy.value) {
-    case 'size':
-      return item.size ? formatBytes(parseInt(item.size)) : 'N/A';
-    case 'created_time':
-      return item.created_time ? new Date(item.created_time).toLocaleString() : 'N/A';
-    case 'modified_time':
-      return item.modified_time ? new Date(item.modified_time).toLocaleString() : 'N/A';
-    case 'file_category':
-      return item.file_category || 'N/A';
-    default:
-      return '';
-  }
-};
-
 const updateSelectedIndices = () => {
-  const currentlySelectedIds = new Set(selected.value.map(index => list.value[index].id));
-  selected.value = [];
+  const currentlySelectedIds = new Set(selected.value.map(index => list.value[index].id))
+  selected.value = []
   list.value.forEach((item, index) => {
-    if (currentlySelectedIds.has(item.id)) {
-      selected.value.push(index);
-    }
-  });
-};
+    if (currentlySelectedIds.has(item.id)) selected.value.push(index)
+  })
+}
 
+// 递归获取所有选中文件（展开文件夹）
 const getAllList = async () => {
-  emits('msg', '开始获取文件内容', 'info');
-  const initialSelectedItems = [];
-  for (const index of selected.value) {
-    initialSelectedItems.push(list.value[index]);
-  }
+  emits('msg', '开始获取文件内容', 'info')
+  const initialSelectedItems = selected.value.map(index => list.value[index])
+  const allFiles = []
+  const foldersToProcess = []
 
-  const allFiles = [];
-  const foldersToProcess = [];
-
-  // Separate initial selection into files and folders
   initialSelectedItems.forEach(item => {
     if (item.type === 'drive#folder') {
-      // Start with folder name as path.
-      foldersToProcess.push({ id: item.id, name: item.name, path: item.name });
+      foldersToProcess.push({ id: item.id, name: item.name, path: item.name })
     } else {
-      // Files in root have no extra path
-      allFiles.push({ ...item, path: '' });
+      allFiles.push({ ...item, path: '' })
     }
-  });
+  })
 
-  let processedCount = 0;
+  let processedCount = 0
   while (foldersToProcess.length > 0) {
-    const currentFolder = foldersToProcess.shift(); // Get a folder to process
-    processedCount++;
-    emits('msg', `正在扫描第 ${processedCount} 个文件夹: ${currentFolder.name}`, 'info');
+    const currentFolder = foldersToProcess.shift()
+    processedCount++
+    emits('msg', `正在扫描第 ${processedCount} 个文件夹: ${currentFolder.name}`, 'info')
+
     try {
-      let result = null;
+      let result = null
 
       if (isSharePage()) {
-        // 分享页：优先从 Pinia store 的 detail 缓存读取
         const detail = getShareFolderDetail(currentFolder.id)
-        if (detail && detail.files) {
+        if (detail?.files) {
           result = detail
         } else {
-          // 缓存未命中，调用 API 直接获取
-          console.log('[pikpakHelpr] getAllList: cache miss for', currentFolder.name, 'calling API')
           try {
             result = await fetchShareFiles(shareId.value, currentFolder.id, passCodeToken.value)
-            if (!result || !result.files || result.files.length === 0) {
+            if (!result?.files?.length) {
               emits('msg', `文件夹 "${currentFolder.name}" 内容为空`, 'warning')
               continue
             }
           } catch (e) {
-            console.error('[pikpakHelpr] getAllList: API call failed for', currentFolder.name, e)
+            console.error('[pikpakHelpr] getAllList API failed:', e)
             emits('msg', `获取文件夹 "${currentFolder.name}" 内容失败: ${e.message || '网络错误'}`, 'error')
             continue
           }
         }
       } else {
-        result = await getList(currentFolder.id);
+        result = await getList(currentFolder.id)
       }
 
       if (result.files) {
         for (const file of result.files) {
           if (file.kind === 'drive#folder') {
-            foldersToProcess.push({ id: file.id, name: file.name, path: `${currentFolder.path}/${file.name}` });
+            foldersToProcess.push({ id: file.id, name: file.name, path: `${currentFolder.path}/${file.name}` })
           } else {
-            allFiles.push({ ...file, path: currentFolder.path });
+            allFiles.push({ ...file, path: currentFolder.path })
           }
         }
       }
     } catch (e) {
-      emits('msg', `获取文件夹 ${currentFolder.name} 内容失败`, 'error');
-      console.error(e);
+      emits('msg', `获取文件夹 ${currentFolder.name} 内容失败`, 'error')
+      console.error(e)
     }
   }
 
-  selectedItems.value = allFiles;
-  emits('msg', `文件获取完毕，共${allFiles.length}个文件。`, 'success');
+  selectedItems.value = allFiles
+  emits('msg', `文件获取完毕，共${allFiles.length}个文件。`, 'success')
 }
 
 const pushBefore = async () => {
-  if (!isForbidden.value) {
-    isForbidden.value = true
-    await getAllList()
-    
-    // 直接推送
-    push()
-  } else {
+  if (isForbidden.value) {
     emits('msg', '已经开始推送了', 'warning')
+    return
   }
+  isForbidden.value = true
+  await getAllList()
+  push()
 }
 
-
 const push = async () => {
-  let total = selectedItems.value.length
-  let success = 0
-  let fail = 0
-  let ariaHost = window.localStorage.getItem('ariaHost') || ''
-  let ariaPath = window.localStorage.getItem('ariaPath') || ''
-  let ariaToken = window.localStorage.getItem('ariaToken') || ''
-  let ariaParams = window.localStorage.getItem('ariaParams') || ''
-  let errorMSG = ''
-  let retryList = [] // 重试列表
-  
+  const { host: ariaHost, path: ariaPath, token: ariaToken, params: customParams } = getAriaConfig()
+
   if (!ariaHost) {
     emits('msg', '请先配置aria2', 'error')
     close()
     return
   }
-  
-  console.log(`[pikpakHelpr] 共${selectedItems.value.length}个项目`);
-  
-  // 并发处理，限制同时进行的请求数量
+
+  let success = 0
+  let fail = 0
+  let errorMSG = ''
+
+  console.log(`[pikpakHelpr] 共${selectedItems.value.length}个项目`)
+
+  // 并发 Worker 池处理
   const MAX_CONCURRENT = 5
   const items = [...selectedItems.value]
   let currentIndex = 0
-  
+
   const processOne = async () => {
     while (currentIndex < items.length) {
       const i = currentIndex++
       const item = items[i]
       console.log(`[pikpakHelpr] 处理第${i + 1}/${items.length}个项目: ${item.name}`)
       emits('msg', `正在处理: ${item.name}`, 'info')
-      
+
       try {
-        // 获取下载链接
         const res = await getDownload(item.id)
-        
+
         if (res.error_description) {
           console.error(`[pikpakHelpr] 第${i + 1}个项目下载链接获取失败:`, res.error_description)
           emits('msg', `失败: ${item.name} - ${res.error_description}`, 'error')
           fail++
           continue
         }
-        
-        console.log(`[pikpakHelpr] 第${i + 1}个项目下载链接获取成功:`, res.web_content_link)
-        emits('msg', `下载链接获取成功: ${item.name}`, 'success')
-        
-        // 构建 aria2 请求数据
-        let ariaData = {
-          id: new Date().getTime(),
-          jsonrpc: '2.0',
-          method: 'aria2.addUri',
-          params: [
-            [res.web_content_link],
-            { out: res.name }
-          ]
-        }
-        
-        if (ariaPath) {
-          ariaData.params[1].dir = ariaPath + (item.path || '')
-        }
-        
-        if (ariaParams) {
-          const customParams = ariaParams.split(';')
-          customParams.forEach(param => {
+
+        // 构建 aria2 请求参数
+        const rpcParams = [
+          [res.web_content_link],
+          { out: res.name }
+        ]
+
+        if (ariaPath) rpcParams[1].dir = ariaPath + (item.path || '')
+
+        // 自定义参数
+        if (customParams) {
+          customParams.split(';').forEach(param => {
             const [key, value] = param.split('=')
-            if (key && value) {
-              ariaData.params[1][key] = value
-            }
+            if (key && value) rpcParams[1][key] = value
           })
         }
-        
-        if (ariaToken) {
-          ariaData.params.unshift(`token:${ariaToken}`)
-        }
-        
-        console.log('[pikpakHelpr] 推送到 aria2:', ariaData)
-        
-        // 推送到 aria2
+
+        if (ariaToken) rpcParams.unshift(`token:${ariaToken}`)
+
+        const ariaData = buildAria2Payload('aria2.addUri', rpcParams)
         const ariares = await pushToAria(ariaHost, ariaData)
-        let resoj = ariares
-        
-        // 失败时ariares为字符串类型，将其转为对象
-        if (typeof ariares === 'string') {
-          resoj = JSON.parse(ariares)
-        }
-        
+
+        // 兼容字符串响应
+        const resoj = typeof ariares === 'string' ? JSON.parse(ariares) : ariares
+
         if (resoj.result) {
           success++
-          console.log(`[pikpakHelpr] 推送成功: ${item.name}`)
         } else {
-          console.error('[pikpakHelpr] 推送失败:', resoj, '请求数据:', ariaData)
           errorMSG = resoj.error?.message === 'Unauthorized' ? '密钥不对' : (resoj.error?.message || '推送失败')
           fail++
           emits('msg', `推送失败: ${item.name} - ${errorMSG}`, 'error')
         }
-        
       } catch (e) {
         console.error(`[pikpakHelpr] 第${i + 1}个项目处理失败:`, e)
-        emits('msg', `处理失败: ${item.name} - ${e.message || e.statusText || '未知错误'}`, 'error')
+        emits('msg', `处理失败: ${item.name} - ${e.message || '未知错误'}`, 'error')
         fail++
-        errorMSG = e.statusText ? `${e.statusText} 请检测配置` : e.message
+        errorMSG = e.message
       }
     }
   }
-  
-  // 启动 MAX_CONCURRENT 个 Worker 并发处理
+
   const workers = Array.from({ length: MAX_CONCURRENT }, () => processOne())
   await Promise.all(workers)
-  
-  // 显示最终结果
+
   const resultType = fail === 0 ? 'success' : (success === 0 ? 'error' : 'warning')
-  emits('msg', `推送完成 - 成功: ${success}, 失败: ${fail}${fail !== 0 ? ' (' + errorMSG + ')' : ''}`, resultType)
+  emits('msg', `推送完成 - 成功: ${success}, 失败: ${fail}${fail ? ' (' + errorMSG + ')' : ''}`, resultType)
   console.info(`[pikpakHelpr] 推送完成 - 成功: ${success}, 失败: ${fail}`)
-  
-  if (retryList.length > 0) {
-    emits('msg', `即将重试${retryList.length}个项目`, 'warning')
-    selectedItems.value = retryList
-    retryList = []
-    await push()
-  } else {
-    close()
-  }
+
+  close()
 }
+
+onMounted(() => setTimeout(handleTestConnection, 1000))
 </script>
 
 <style scoped>
-.dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.6);
-  z-index: 3000;
-}
-
-/* 现代化对话框样式 */
-.dialog {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-  z-index: 10000;
-  padding: 32px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  border-radius: 20px;
-  width: 90vw;
-  max-width: 800px;
-  min-width: 320px;
-  max-height: 90vh;
-  box-sizing: border-box;
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  animation: dialogFadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-
-  /* 修改对话框样式 */
-  display: flex;
-  flex-direction: column;
-  max-height: 90vh;
-  overflow: hidden; /* 防止整个对话框滚动 */
-}
-
-@keyframes dialogFadeIn {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
-  }
-}
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .dialog {
-    width: 95vw;
-    padding: 24px;
-    border-radius: 16px;
-  }
-}
-
-@media (max-width: 480px) {
-  .dialog {
-    width: 100vw;
-    height: 100vh;
-    max-height: 100vh;
-    border-radius: 0;
-    padding: 20px;
-  }
-}
-
-/* 标题样式 */
-.dialog h2 {
-  text-align: center;
-  color: #1e293b;
-  margin-bottom: 24px;
-  font-size: 24px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-@media (max-width: 480px) {
-  .dialog h2 {
-    font-size: 20px;
-    margin-bottom: 20px;
-  }
-}
-
-/* 关闭按钮 */
-.dialog .close {
-  position: absolute;
-  right: 20px;
-  top: 20px;
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  cursor: pointer;
-  color: #64748b;
-  background: rgba(248, 250, 252, 0.8);
-  border-radius: 50%;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  border: 1px solid rgba(226, 232, 240, 0.5);
-}
-
-.dialog .close:hover {
-  color: #ef4444;
-  background: rgba(254, 226, 226, 0.8);
-  border-color: rgba(248, 113, 113, 0.3);
-  transform: scale(1.05);
-}
-
-/* 工具栏样式 */
+/* 工具栏 */
 .toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
   padding: 16px 20px;
-  background: linear-gradient(
-    135deg,
-    rgba(99, 102, 241, 0.05) 0%,
-    rgba(168, 85, 247, 0.05) 100%
-  );
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.05) 100%);
   border-radius: 12px;
   border: 1px solid rgba(99, 102, 241, 0.1);
-}
-
-@media (max-width: 640px) {
-  .toolbar {
-    flex-direction: column;
-    gap: 16px;
-    align-items: stretch;
-  }
 }
 
 .toolbar input[type="checkbox"] {
@@ -655,12 +383,6 @@ const push = async () => {
   flex-wrap: wrap;
 }
 
-@media (max-width: 640px) {
-  .sort-options {
-    justify-content: center;
-  }
-}
-
 .sort-options label {
   font-size: 14px;
   font-weight: 500;
@@ -688,17 +410,13 @@ const push = async () => {
   border-color: #9ca3af;
 }
 
-/* 文件列表容器 */
+/* 文件列表 */
 .movies {
   margin-top: 16px;
-
-  /* 修改文件列表容器 */
-  flex: 1; /* 关键修改：占据剩余空间 */
-  min-height: 200px; /* 最小高度保障 */
-  /* height: 400px; */
-
+  flex: 1;
+  min-height: 200px;
   overflow-y: auto;
-  overflow-x: hidden; /* 防止出现横向滚动条 */
+  overflow-x: hidden;
   border: 2px solid #f1f5f9;
   border-radius: 16px;
   padding: 0;
@@ -706,13 +424,6 @@ const push = async () => {
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.06);
 }
 
-@media (max-width: 480px) {
-  .movies {
-    height: 300px;
-  }
-}
-
-/* 自定义滚动条 */
 .movies::-webkit-scrollbar {
   width: 8px;
 }
@@ -742,18 +453,14 @@ const push = async () => {
   color: #334155;
   transition: all 0.2s ease;
   cursor: pointer;
-  margin-right: -4px; /* 预留移动空间 */
-  overflow: hidden; /* 防止子元素溢出 */
+  margin-right: -4px;
+  overflow: hidden;
 }
 
 .movies li:hover {
-  background: linear-gradient(
-    135deg,
-    rgba(99, 102, 241, 0.05) 0%,
-    rgba(168, 85, 247, 0.05) 100%
-  );
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.05) 100%);
   transform: translateX(4px);
-  margin-right: 0; /* hover 时恢复正常边距 */
+  margin-right: 0;
 }
 
 .movies li:last-child {
@@ -794,213 +501,29 @@ const push = async () => {
   max-width: 30%;
 }
 
-/* 底部操作区 */
-.footer {
-  /* margin-top: 24px; */
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(226, 232, 240, 0.6);
+/* 响应式 */
+@media (max-width: 768px) {
+  .toolbar {
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+  }
 
-  /* 确保底部区域始终可见 */
-  flex-shrink: 0; /* 防止被压缩 */
-  margin-top: auto; /* 自动推到底部 */
+  .sort-options {
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .sort-options select {
+    width: 100%;
+    box-sizing: border-box;
+  }
 }
 
 @media (max-width: 480px) {
   .movies {
-    min-height: 150px; /* 移动端适当减小最小高度 */
-  }
-
-  .footer {
-    flex-direction: column;
-    gap: 12px;
-    padding: 16px 0 0;
-  }
-}
-
-/* 现代化按钮样式 */
-.btn.el-button {
-  padding: 14px 28px;
-  border: none;
-  border-radius: 12px;
-  cursor: pointer;
-  font-size: 16px;
-  font-weight: 600;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  position: relative;
-  overflow: hidden;
-}
-
-/* 主要按钮样式 */
-.btn.el-button--primary {
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  color: white;
-  box-shadow: 0 4px 14px 0 rgba(99, 102, 241, 0.3);
-}
-
-/* 次要按钮样式 */
-.btn.el-button--secondary {
-  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-  color: #475569;
-  border: 2px solid #cbd5e1;
-  box-shadow: 0 2px 8px 0 rgba(71, 85, 105, 0.1);
-}
-
-.btn.el-button::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-  transition: left 0.5s;
-}
-
-.btn.el-button--primary:hover {
-  background: linear-gradient(135deg, #5b21b6 0%, #7c3aed 100%);
-  box-shadow: 0 8px 25px 0 rgba(99, 102, 241, 0.4);
-  transform: translateY(-2px);
-}
-
-.btn.el-button--secondary:hover {
-  background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
-  border-color: #94a3b8;
-  box-shadow: 0 4px 12px 0 rgba(71, 85, 105, 0.15);
-  transform: translateY(-2px);
-}
-
-.btn.el-button:hover::before {
-  left: 100%;
-}
-
-.btn.el-button:active {
-  transform: translateY(0);
-  box-shadow: 0 4px 14px 0 rgba(99, 102, 241, 0.3);
-}
-
-@media (max-width: 480px) {
-  .btn.el-button {
-    width: 100%;
-    padding: 16px;
-    font-size: 18px;
-  }
-}
-
-/* 新增：修复移动端显示器顶部工具栏布局问题 */
-@media (max-width: 768px) {
-  .toolbar {
-    flex-direction: column; /* 工具栏整体改为垂直布局 */
-    gap: 12px;
-    align-items: stretch; /* 子元素拉伸填充宽度 */
-  }
-
-  .sort-options {
-    display: flex;
-    flex-direction: column; /* 关键：排序选项垂直排列 */
-    gap: 8px; /* 增加垂直间距 */
-    width: 100%; /* 确保充分利用可用宽度 */
-  }
-
-  .sort-options label[for="sort-by"] {
-    margin-bottom: 4px; /* 给"排序方式"标签一点下边距 */
-    font-size: 14px; /* 可选：调整字体大小适应小屏幕 */
-  }
-
-  .sort-options select {
-    width: 100%; /* 下拉框宽度填满容器 */
-    box-sizing: border-box; /* 确保padding和border包含在宽度内 */
-  }
-}
-
-/* aria2连接状态样式 */
-.connection-status {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  margin: 16px 0;
-  background: #f8f9fa;
-  border-radius: 8px;
-  border: 1px solid #e9ecef;
-}
-
-.status-indicator {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  transition: all 0.3s ease;
-}
-
-.status-dot.connected {
-  background: #52c41a;
-  box-shadow: 0 0 0 2px rgba(82, 196, 26, 0.2);
-  animation: pulse 2s infinite;
-}
-
-.status-dot.disconnected {
-  background: #ff4d4f;
-  box-shadow: 0 0 0 2px rgba(255, 77, 79, 0.2);
-}
-
-.status-dot.testing {
-  background: #1890ff;
-  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
-  animation: pulse 1s infinite;
-}
-
-.status-dot.unknown {
-  background: #d9d9d9;
-}
-
-.status-text {
-  font-size: 14px;
-  color: #666;
-  font-weight: 500;
-}
-
-.test-btn {
-  padding: 6px 12px;
-  font-size: 12px;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
-  background: white;
-  color: #666;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.test-btn:hover:not(:disabled) {
-  border-color: #409eff;
-  color: #409eff;
-}
-
-.test-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-@keyframes pulse {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.1);
-    opacity: 0.7;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
+    min-height: 150px;
   }
 }
 </style>

@@ -146,27 +146,4 @@ onUnmounted(() => {
 .download-button:active {
   transform: scale(0.95);
 }
-
-
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .main-button {
-    width: 45px;
-    height: 45px;
-  }
-  
-  .options {
-    left: 55px;
-    min-width: 110px;
-  }
-  
-  .option {
-    padding: 8px 12px;
-  }
-  
-  .option span {
-    font-size: 13px;
-  }
-}
 </style>
