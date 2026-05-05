@@ -237,7 +237,7 @@ export async function getShareCurrentFiles() {
   const data = getSharePageData()
   if (!data) {
     console.warn('[pikpakHelpr] getShareCurrentFiles: no share data')
-    return { files: [] }
+    return { files: [], error: 'no_share_data', message: '无法读取 Pinia store 数据，页面可能未完全加载' }
   }
 
   if (!shareObserverInstalled) installShareObserver()
@@ -245,10 +245,16 @@ export async function getShareCurrentFiles() {
   const shareId = getShareId()
   const passCodeToken = data?.data?.pass_code_token || ''
 
+  if (!passCodeToken) {
+    return { files: [], error: 'no_pass_code_token', message: '缺少 pass_code_token，可能需要输入提取码' }
+  }
+
   // parent_id 未初始化 → 从 Pinia store 获取
   if (currentShareParentId === undefined) {
     initShareParentIdFromPinia()
   }
+
+  let apiError = null
 
   // parent_id 已确定 → 直接调 API
   if (currentShareParentId !== undefined) {
@@ -257,6 +263,7 @@ export async function getShareCurrentFiles() {
       if (res?.files?.length > 0) return { files: res.files }
     } catch (e) {
       console.error('[pikpakHelpr] getShareCurrentFiles API failed:', e)
+      apiError = e
     }
   }
 
@@ -265,7 +272,14 @@ export async function getShareCurrentFiles() {
   const fallbackFiles = Array.isArray(curDir) ? curDir : (curDir?.files || data.data?.files || [])
   if (fallbackFiles.length > 0) return { files: fallbackFiles }
 
-  return { files: [] }
+  // 所有策略都未获取到文件，返回诊断信息
+  if (apiError) {
+    return { files: [], error: 'api_failed', message: `API 请求失败: ${apiError.message || '网络错误'}` }
+  }
+  if (currentShareParentId === undefined) {
+    return { files: [], error: 'no_parent_id', message: '无法确定当前文件夹 ID，请刷新页面后重试' }
+  }
+  return { files: [], error: 'empty_result', message: '文件夹为空或数据未同步' }
 }
 
 export function getShareFolderDetail(folderId) {

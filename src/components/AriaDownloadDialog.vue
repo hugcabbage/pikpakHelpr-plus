@@ -24,7 +24,8 @@
           </select>
         </div>
       </div>
-      <ul class="movies">
+      <!-- 文件列表 -->
+      <ul v-if="list.length > 0" class="movies">
         <li v-for="(item, index) in list" :key="item.id">
           <input @change="onCheck" type="checkbox" :id="item.id" :value="index" v-model="selected">
           <span class="icon">{{ item.type === 'drive#folder' ? '📁' : '📄' }}</span>
@@ -32,6 +33,20 @@
           <span class="file-info">{{ formatFileInfo(item, sortBy) }}</span>
         </li>
       </ul>
+
+      <!-- 加载中 -->
+      <div v-if="loading" class="empty-state">
+        <div class="loading-spinner"></div>
+        <div class="empty-title">正在加载文件列表...</div>
+      </div>
+
+      <!-- 空状态/错误提示 -->
+      <div v-else-if="list.length === 0" class="empty-state">
+        <div class="empty-icon">{{ loadError ? '⚠️' : '📂' }}</div>
+        <div class="empty-title">{{ loadError || '暂无文件' }}</div>
+        <div v-if="diagnosticInfo" class="empty-detail">{{ diagnosticInfo }}</div>
+        <button v-if="canRetry" class="retry-btn" @click="retryLoad">重新加载</button>
+      </div>
 
       <!-- aria2连接状态显示 -->
       <div class="connection-status">
@@ -68,6 +83,10 @@ const selected = ref([])
 const checkedAll = ref(false)
 const selectedItems = ref([])
 const isForbidden = ref(false)
+const loading = ref(false)
+const loadError = ref('')
+const diagnosticInfo = ref('')
+const canRetry = ref(false)
 
 // 分享页状态
 const shareId = ref('')
@@ -96,40 +115,116 @@ watch(
   () => props.show,
   (val) => {
     if (!val) return
-    list.value = []
-
-    if (isSharePage()) {
-      shareId.value = getShareId()
-      const data = getSharePageData()
-      passCodeToken.value = data?.data?.pass_code_token || ''
-      emits('msg', '正在加载分享文件列表...', 'info')
-
-      const loadShareFiles = async (retries = 5) => {
-        const shareFiles = await getShareCurrentFiles()
-        if (shareFiles.files.length > 0 || retries <= 0) {
-          list.value = shareFiles.files.map(buildFileItem)
-          sortList()
-          emits('msg', `文件列表加载完成，共 ${list.value.length} 项`, 'success')
-        } else {
-          setTimeout(() => loadShareFiles(retries - 1), 500)
-        }
-      }
-      loadShareFiles()
-    } else {
-      let parentId = window.location.href.split('/').pop()
-      if (parentId === 'all') parentId = ''
-      emits('msg', '开始加载文件列表，请稍等', 'info')
-      getList(parentId).then(res => {
-        list.value = res.files.map(buildFileItem)
-        sortList()
-      }).finally(() => {
-        emits('msg', '文件列表加载完成', 'success')
-      })
-    }
-
+    loadFileList()
     setTimeout(handleTestConnection, 500)
   }
 )
+
+// 加载文件列表入口
+const loadFileList = async () => {
+  list.value = []
+  loadError.value = ''
+  diagnosticInfo.value = ''
+  canRetry.value = false
+  loading.value = true
+
+  if (isSharePage()) {
+    await loadShareFileList()
+  } else {
+    await loadDriveFileList()
+  }
+
+  loading.value = false
+  if (list.value.length === 0 && !loadError.value) {
+    loadError.value = '未找到文件'
+  }
+}
+
+// 加载分享页文件列表（含前置检查 + 重试 + 诊断）
+const loadShareFileList = async () => {
+  shareId.value = getShareId()
+  const data = getSharePageData()
+  passCodeToken.value = data?.data?.pass_code_token || ''
+
+  // 前置检查
+  if (!data) {
+    loadError.value = '无法读取页面数据'
+    diagnosticInfo.value = '请确认页面已完全加载且已登录 Pikpak 账号后重试'
+    canRetry.value = true
+    emits('msg', loadError.value, 'error')
+    return
+  }
+
+  if (!passCodeToken.value) {
+    loadError.value = '缺少分享验证令牌'
+    diagnosticInfo.value = '请确认已输入提取码（如需要），或刷新页面后重试'
+    canRetry.value = true
+    emits('msg', loadError.value, 'error')
+    return
+  }
+
+  // 带重试的加载
+  const maxRetries = 5
+  let lastResult = null
+
+  for (let i = 0; i < maxRetries; i++) {
+    emits('msg', i === 0 ? '正在加载分享文件列表...' : `正在重试 (${i + 1}/${maxRetries})...`, 'info')
+    try {
+      lastResult = await getShareCurrentFiles()
+      if (lastResult.files.length > 0) {
+        list.value = lastResult.files.map(buildFileItem)
+        sortList()
+        emits('msg', `文件列表加载完成，共 ${list.value.length} 项`, 'success')
+        return
+      }
+    } catch (e) {
+      console.error('[pikpakHelpr] loadShareFileList retry failed:', e)
+      lastResult = { files: [], error: 'exception', message: e.message || '未知错误' }
+    }
+    if (i < maxRetries - 1) {
+      await new Promise(r => setTimeout(r, 800))
+    }
+  }
+
+  // 重试耗尽，使用诊断信息
+  if (lastResult?.error) {
+    loadError.value = '文件列表加载失败'
+    diagnosticInfo.value = lastResult.message || '未知错误'
+  } else {
+    loadError.value = '未找到文件'
+    diagnosticInfo.value = '页面数据已读取但未找到文件，可能是空文件夹或数据同步延迟'
+  }
+  canRetry.value = true
+  emits('msg', loadError.value, 'error')
+}
+
+// 加载普通页面文件列表
+const loadDriveFileList = async () => {
+  let parentId = window.location.href.split('/').pop()
+  if (parentId === 'all') parentId = ''
+
+  emits('msg', '开始加载文件列表，请稍等', 'info')
+
+  try {
+    const res = await getList(parentId)
+    if (res?.files?.length > 0) {
+      list.value = res.files.map(buildFileItem)
+      sortList()
+      emits('msg', `文件列表加载完成，共 ${list.value.length} 项`, 'success')
+    } else {
+      loadError.value = '未找到文件'
+      diagnosticInfo.value = '当前目录可能为空，或文件列表获取失败'
+      canRetry.value = true
+    }
+  } catch (e) {
+    loadError.value = '文件列表加载失败'
+    diagnosticInfo.value = `错误信息: ${e.message || '未知错误'}`
+    canRetry.value = true
+    emits('msg', loadError.value, 'error')
+  }
+}
+
+const retryLoad = () => loadFileList()
 
 const close = () => {
   selected.value = []
@@ -525,5 +620,84 @@ onMounted(() => setTimeout(handleTestConnection, 1000))
   .movies {
     min-height: 150px;
   }
+}
+
+/* 空状态 / 加载状态 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  padding: 32px 20px;
+  margin-top: 16px;
+  border: 2px solid #f1f5f9;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.06);
+}
+
+.empty-icon {
+  font-size: 3em;
+  margin-bottom: 12px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+}
+
+.empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #374151;
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.empty-detail {
+  font-size: 13px;
+  color: #6b7280;
+  text-align: center;
+  max-width: 360px;
+  line-height: 1.6;
+  padding: 8px 16px;
+  background: #fef3c7;
+  border-radius: 8px;
+  border: 1px solid #fde68a;
+  margin-bottom: 16px;
+}
+
+.retry-btn {
+  padding: 8px 24px;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+}
+
+.retry-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+
+.retry-btn:active {
+  transform: translateY(0);
+}
+
+/* 加载动画 */
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>
