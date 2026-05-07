@@ -1,65 +1,68 @@
 <template>
-  <div v-if="show">
-    <div class="dialog-overlay" @click="close"></div>
-    <div style="width: 50%" class="dialog">
+  <div v-if="show" @click.stop @mousedown.stop>
+    <div class="dialog-overlay" @click.stop="close"></div>
+    <div class="dialog">
       <h2>推送到 Aria2</h2>
-      <div class="close" @click="close">×</div>
+      <div class="close" @click.stop="close">×</div>
 
-      <!-- 加载中 -->
-      <div v-if="loading" class="empty-state">
-        <div class="loading-spinner"></div>
-        <div class="empty-title">正在获取文件信息...</div>
-      </div>
-
-      <!-- 有选择内容 -->
-      <template v-else-if="hasSelection">
-        <!-- 选中摘要 -->
-        <div class="summary">
-          <div class="summary-stats">
-            <span v-if="selectedFolders.length > 0" class="stat-badge folder-badge">
-              {{ selectedFolders.length }} 个文件夹
-            </span>
-            <span v-if="selectedFiles.length > 0" class="stat-badge file-badge">
-              {{ selectedFiles.length }} 个文件
-            </span>
-            <span v-if="unmatchedIds.length > 0" class="stat-badge unknown-badge">
-              {{ unmatchedIds.length }} 个未知
-            </span>
-          </div>
-          <div v-if="totalSize > 0" class="summary-size">
-            预估大小：{{ formatBytes(totalSize) }}
-          </div>
+      <!-- 中间可滚动内容区 -->
+      <div class="dialog-body">
+        <!-- 加载中 -->
+        <div v-if="loading" class="empty-state">
+          <div class="loading-spinner"></div>
+          <div class="empty-title">正在获取文件信息...</div>
         </div>
 
-        <!-- 文件列表（只读展示） -->
-        <ul class="file-list">
-          <!-- 文件夹 -->
-          <li v-for="item in selectedFolders" :key="item.id" class="file-item folder-item">
-            <span class="icon">📁</span>
-            <span class="file-name">{{ item.name }}</span>
-            <span v-if="item._folderSize" class="file-size folder-size">{{ formatBytes(item._folderSize) }}</span>
-            <span v-else class="file-tag">文件夹</span>
-          </li>
-          <!-- 文件 -->
-          <li v-for="item in selectedFiles" :key="item.id" class="file-item">
-            <span class="icon">📄</span>
-            <span class="file-name">{{ item.name }}</span>
-            <span class="file-size">{{ item.size ? formatBytes(parseInt(item.size)) : '' }}</span>
-          </li>
-          <!-- 未匹配到的 ID -->
-          <li v-for="id in unmatchedIds" :key="id" class="file-item unmatched-item">
-            <span class="icon">❓</span>
-            <span class="file-name unknown-name">{{ id }}</span>
-            <span class="file-tag unknown-tag">未匹配详情</span>
-          </li>
-        </ul>
-      </template>
+        <!-- 有选择内容 -->
+        <template v-else-if="hasSelection">
+          <!-- 选中摘要 -->
+          <div class="summary">
+            <div class="summary-stats">
+              <span v-if="selectedFolders.length > 0" class="stat-badge folder-badge">
+                {{ selectedFolders.length }} 个文件夹
+              </span>
+              <span v-if="selectedFiles.length > 0" class="stat-badge file-badge">
+                {{ selectedFiles.length }} 个文件
+              </span>
+              <span v-if="unmatchedIds.length > 0" class="stat-badge unknown-badge">
+                {{ unmatchedIds.length }} 个未知
+              </span>
+            </div>
+            <div v-if="totalSize > 0" class="summary-size">
+              预估大小：{{ formatBytes(totalSize) }}
+            </div>
+          </div>
 
-      <!-- 无选择内容 -->
-      <div v-else class="empty-state">
-        <div class="empty-icon">📂</div>
-        <div class="empty-title">未选择文件</div>
-        <div class="empty-guide">请先在页面上勾选要下载的文件或文件夹，然后再点击推送按钮</div>
+          <!-- 文件列表（只读展示） -->
+          <ul class="file-list">
+            <!-- 文件夹 -->
+            <li v-for="item in selectedFolders" :key="item.id" class="file-item folder-item">
+              <span class="icon">📁</span>
+              <span class="file-name">{{ item.name }}</span>
+              <span v-if="item._folderSize" class="file-size folder-size">{{ formatBytes(item._folderSize) }}</span>
+              <span v-else class="file-tag">文件夹</span>
+            </li>
+            <!-- 文件 -->
+            <li v-for="item in selectedFiles" :key="item.id" class="file-item">
+              <span class="icon">📄</span>
+              <span class="file-name">{{ item.name }}</span>
+              <span class="file-size">{{ item.size ? formatBytes(parseInt(item.size)) : '' }}</span>
+            </li>
+            <!-- 未匹配到的 ID -->
+            <li v-for="id in unmatchedIds" :key="id" class="file-item unmatched-item">
+              <span class="icon">❓</span>
+              <span class="file-name unknown-name">{{ id }}</span>
+              <span class="file-tag unknown-tag">未匹配详情</span>
+            </li>
+          </ul>
+        </template>
+
+        <!-- 无选择内容 -->
+        <div v-else class="empty-state">
+          <div class="empty-icon">📂</div>
+          <div class="empty-title">未选择文件</div>
+          <div class="empty-guide">请先在页面上勾选要下载的文件或文件夹，然后再点击推送按钮</div>
+        </div>
       </div>
 
       <!-- aria2连接状态显示 -->
@@ -74,9 +77,11 @@
       </div>
 
       <div class="footer">
-        <div class="btn el-button el-button--secondary" @click="openConfig">配置aria2</div>
+        <div class="btn el-button el-button--secondary" @click="openConfig">
+          <span class="lbl-d">配置aria2</span><span class="lbl-m">配置</span>
+        </div>
         <div v-if="hasSelection" class="btn el-button el-button--primary" @click="pushBefore" :disabled="isPushing">
-          {{ isPushing ? '推送中...' : '推送到aria2' }}
+          <span class="lbl-d">{{ isPushing ? '推送中...' : '推送到aria2' }}</span><span class="lbl-m">{{ isPushing ? '推送中...' : '推送' }}</span>
         </div>
         <div v-else class="btn el-button el-button--primary" @click="close">关闭</div>
       </div>
@@ -595,6 +600,10 @@ onMounted(() => setTimeout(handleTestConnection, 1000))
 </script>
 
 <style scoped>
+/* 桌面/移动端标签切换 */
+.lbl-m { display: none; }
+.lbl-d { display: inline; }
+
 /* 选中摘要 */
 .summary {
   margin-bottom: 16px;
@@ -646,9 +655,8 @@ onMounted(() => setTimeout(handleTestConnection, 1000))
 
 /* 文件列表 */
 .file-list {
-  flex: 1;
-  min-height: 80px;
-  max-height: 350px;
+  min-height: 120px;
+  max-height: 420px;
   overflow-y: auto;
   overflow-x: hidden;
   border: 2px solid #f1f5f9;
@@ -824,7 +832,35 @@ onMounted(() => setTimeout(handleTestConnection, 1000))
 
 @media (max-width: 480px) {
   .file-list {
-    min-height: 60px;
+    max-height: none;
+  }
+
+  .dialog-body {
+    /* 移动端让内容区自由滚动，不受 file-list 的 max-height 约束 */
+  }
+
+  .lbl-d { display: none; }
+  .lbl-m { display: inline; }
+
+  .summary {
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+
+  .file-item {
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+
+  .file-item .icon {
+    font-size: 1.2em;
+    margin-right: 8px;
+  }
+
+  .file-item .file-size,
+  .file-item .file-tag {
+    font-size: 11px;
+    padding: 2px 6px;
   }
 }
 </style>

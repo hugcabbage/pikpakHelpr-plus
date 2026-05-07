@@ -158,6 +158,31 @@
   margin-top: auto;
 }
 
+/* 中间可滚动内容区（共享给下载/配置两个对话框） */
+.dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.dialog-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dialog-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dialog-body::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 6px;
+}
+
+.dialog-body::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
 /* Aria2 连接状态 */
 .connection-status {
   display: flex;
@@ -168,6 +193,7 @@
   background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.05) 100%);
   border-radius: 12px;
   border: 1px solid rgba(99, 102, 241, 0.1);
+  flex-shrink: 0;
 }
 
 .status-indicator {
@@ -260,8 +286,10 @@
 @media (max-width: 480px) {
   .dialog {
     width: 100vw;
-    height: 100vh;
-    max-height: 100vh;
+    height: 100dvh;
+    height: -webkit-fill-available;
+    max-height: 100dvh;
+    max-height: -webkit-fill-available;
     border-radius: 0;
     padding: 20px;
   }
@@ -278,8 +306,46 @@
   }
 
   .footer {
-    flex-direction: column;
-    gap: 12px;
-    padding: 16px 0 0;
+    flex-direction: row;
+    gap: 8px;
+    padding: 12px 0 0;
+  }
+
+  .footer .btn.el-button {
+    width: auto;
+    flex: 1;
+    padding: 12px;
+    font-size: 15px;
+  }
+
+  .connection-status {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    margin: 8px 0;
+  }
+
+  .connection-status .status-indicator {
+    width: auto;
+    justify-content: flex-start;
+    flex-shrink: 0;
+  }
+
+  .connection-status .status-text {
+    font-size: 12px;
+  }
+
+  .connection-status .status-dot {
+    width: 8px;
+    height: 8px;
+  }
+
+  .connection-status .test-btn {
+    width: auto;
+    padding: 4px 10px;
+    font-size: 12px;
+    flex-shrink: 0;
+    margin-left: auto;
   }
 }
