@@ -1,51 +1,65 @@
 <template>
   <div v-if="show">
     <div class="dialog-overlay" @click="close"></div>
-    <div style="width: 60%" class="dialog">
-      <h2>请勾选你要下载的</h2>
+    <div style="width: 50%" class="dialog">
+      <h2>推送到 Aria2</h2>
       <div class="close" @click="close">×</div>
-      <div class="toolbar">
-        <label for="checkbox">
-          <input @change="onCheckAll" type="checkbox" id="checkbox" v-model="checkedAll">
-          全选
-        </label>
-        <div class="sort-options">
-          <label for="sort-by">排序方式:</label>
-          <select id="sort-by" v-model="sortBy" @change="sortList">
-            <option value="name">名称</option>
-            <option value="created_time">创建时间</option>
-            <option value="modified_time">修改时间</option>
-            <option value="size">大小</option>
-            <option value="file_category">文件类型</option>
-          </select>
-          <select id="sort-direction" v-model="sortDirection" @change="sortList">
-            <option value="asc">升序</option>
-            <option value="desc">降序</option>
-          </select>
-        </div>
-      </div>
-      <!-- 文件列表 -->
-      <ul v-if="list.length > 0" class="movies">
-        <li v-for="(item, index) in list" :key="item.id">
-          <input @change="onCheck" type="checkbox" :id="item.id" :value="index" v-model="selected">
-          <span class="icon">{{ item.type === 'drive#folder' ? '📁' : '📄' }}</span>
-          <span class="file-name">{{ item.name }}</span>
-          <span class="file-info">{{ formatFileInfo(item, sortBy) }}</span>
-        </li>
-      </ul>
 
       <!-- 加载中 -->
       <div v-if="loading" class="empty-state">
         <div class="loading-spinner"></div>
-        <div class="empty-title">正在加载文件列表...</div>
+        <div class="empty-title">正在获取文件信息...</div>
       </div>
 
-      <!-- 空状态/错误提示 -->
-      <div v-else-if="list.length === 0" class="empty-state">
-        <div class="empty-icon">{{ loadError ? '⚠️' : '📂' }}</div>
-        <div class="empty-title">{{ loadError || '暂无文件' }}</div>
-        <div v-if="diagnosticInfo" class="empty-detail">{{ diagnosticInfo }}</div>
-        <button v-if="canRetry" class="retry-btn" @click="retryLoad">重新加载</button>
+      <!-- 有选择内容 -->
+      <template v-else-if="hasSelection">
+        <!-- 选中摘要 -->
+        <div class="summary">
+          <div class="summary-stats">
+            <span v-if="selectedFolders.length > 0" class="stat-badge folder-badge">
+              {{ selectedFolders.length }} 个文件夹
+            </span>
+            <span v-if="selectedFiles.length > 0" class="stat-badge file-badge">
+              {{ selectedFiles.length }} 个文件
+            </span>
+            <span v-if="unmatchedIds.length > 0" class="stat-badge unknown-badge">
+              {{ unmatchedIds.length }} 个未知
+            </span>
+          </div>
+          <div v-if="totalSize > 0" class="summary-size">
+            预估大小：{{ formatBytes(totalSize) }}
+          </div>
+        </div>
+
+        <!-- 文件列表（只读展示） -->
+        <ul class="file-list">
+          <!-- 文件夹 -->
+          <li v-for="item in selectedFolders" :key="item.id" class="file-item folder-item">
+            <span class="icon">📁</span>
+            <span class="file-name">{{ item.name }}</span>
+            <span v-if="item._folderSize" class="file-size folder-size">{{ formatBytes(item._folderSize) }}</span>
+            <span v-else class="file-tag">文件夹</span>
+          </li>
+          <!-- 文件 -->
+          <li v-for="item in selectedFiles" :key="item.id" class="file-item">
+            <span class="icon">📄</span>
+            <span class="file-name">{{ item.name }}</span>
+            <span class="file-size">{{ item.size ? formatBytes(parseInt(item.size)) : '' }}</span>
+          </li>
+          <!-- 未匹配到的 ID -->
+          <li v-for="id in unmatchedIds" :key="id" class="file-item unmatched-item">
+            <span class="icon">❓</span>
+            <span class="file-name unknown-name">{{ id }}</span>
+            <span class="file-tag unknown-tag">未匹配详情</span>
+          </li>
+        </ul>
+      </template>
+
+      <!-- 无选择内容 -->
+      <div v-else class="empty-state">
+        <div class="empty-icon">📂</div>
+        <div class="empty-title">未选择文件</div>
+        <div class="empty-guide">请先在页面上勾选要下载的文件或文件夹，然后再点击推送按钮</div>
       </div>
 
       <!-- aria2连接状态显示 -->
@@ -61,232 +75,370 @@
 
       <div class="footer">
         <div class="btn el-button el-button--secondary" @click="openConfig">配置aria2</div>
-        <div class="btn el-button el-button--primary" @click="pushBefore">推送到aria2</div>
+        <div v-if="hasSelection" class="btn el-button el-button--primary" @click="pushBefore" :disabled="isPushing">
+          {{ isPushing ? '推送中...' : '推送到aria2' }}
+        </div>
+        <div v-else class="btn el-button el-button--primary" @click="close">关闭</div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { getDownload, pushToAria, getList, getShareCurrentFiles, fetchShareFiles, getShareFolderDetail } from '../api'
-import { isSharePage, getShareId, getSharePageData } from '../utils/index.js'
-import { formatFileInfo } from '../utils/format.js'
+import { isSharePage, getShareId, getSharePageData, getSelectedIds } from '../utils/index.js'
+import { formatBytes } from '../utils/format.js'
 import { getAriaConfig, buildAria2Payload } from '../utils/storage.js'
 import { useAria2Connection } from '../composables/useAria2Connection.js'
 
 const props = defineProps({ show: Boolean })
 const emits = defineEmits(['close', 'msg', 'openConfig'])
 
-const list = ref([])
-const selected = ref([])
-const checkedAll = ref(false)
-const selectedItems = ref([])
-const isForbidden = ref(false)
+// 选中状态（从 API 获取文件列表后匹配）
+const selectedFiles = ref([])
+const selectedFolders = ref([])
+const unmatchedIds = ref([])
+const totalSize = ref(0)
+const isPushing = ref(false)
 const loading = ref(false)
-const loadError = ref('')
-const diagnosticInfo = ref('')
-const canRetry = ref(false)
 
 // 分享页状态
 const shareId = ref('')
 const passCodeToken = ref('')
 
-const sortBy = ref('name')
-const sortDirection = ref('asc')
+// 分享页文件缓存：递归获取子树后的扁平化索引（类似网盘页 dbIndex）
+// 结构：Array<{ id, parent_id, name, kind, size, ... }>
+// 累积式缓存：页面不刷新就不清空，已获取的文件夹子树永久复用
+let shareFileCache = []
+// 已通过 API 递归获取的文件夹 ID 集合，用于增量判断
+let shareFetchedFolderIds = new Set()
+// 已加入缓存的条目 ID 集合，防止重复插入
+let shareCachedEntryIds = new Set()
+
+const hasSelection = computed(() =>
+  selectedFiles.value.length > 0 || selectedFolders.value.length > 0 || unmatchedIds.value.length > 0
+)
 
 // Aria2 连接状态（composable）
 const { connectionStatus, isTestingConnection, testConnection } = useAria2Connection(emits)
-
 const handleTestConnection = () => testConnection()
-
-// 构建文件列表项
-const buildFileItem = (item) => ({
-  id: item.id,
-  name: item.name,
-  type: item.kind,
-  created_time: item.created_time,
-  modified_time: item.modified_time,
-  size: item.size,
-  file_category: item.file_category
-})
 
 watch(
   () => props.show,
   (val) => {
     if (!val) return
-    loadFileList()
+    loadSelection()
     setTimeout(handleTestConnection, 500)
   }
 )
 
-// 加载文件列表入口
-const loadFileList = async () => {
-  list.value = []
-  loadError.value = ''
-  diagnosticInfo.value = ''
-  canRetry.value = false
-  loading.value = true
+// 从页面 selectedIds 加载选中信息（异步：调 API 获取文件列表后匹配）
+const loadSelection = async () => {
+  // 重置状态
+  selectedFiles.value = []
+  selectedFolders.value = []
+  unmatchedIds.value = []
+  totalSize.value = 0
+  // 注意：shareFileCache 为累积式缓存，页面不刷新就不清空
 
   if (isSharePage()) {
-    await loadShareFileList()
-  } else {
-    await loadDriveFileList()
+    shareId.value = getShareId()
+    const data = getSharePageData()
+    passCodeToken.value = data?.data?.pass_code_token || ''
   }
 
-  loading.value = false
-  if (list.value.length === 0 && !loadError.value) {
-    loadError.value = '未找到文件'
-  }
-}
+  const ids = getSelectedIds()
+  if (ids.length === 0) return
 
-// 加载分享页文件列表（含前置检查 + 重试 + 诊断）
-const loadShareFileList = async () => {
-  shareId.value = getShareId()
-  const data = getSharePageData()
-  passCodeToken.value = data?.data?.pass_code_token || ''
-
-  // 前置检查
-  if (!data) {
-    loadError.value = '无法读取页面数据'
-    diagnosticInfo.value = '请确认页面已完全加载且已登录 Pikpak 账号后重试'
-    canRetry.value = true
-    emits('msg', loadError.value, 'error')
-    return
-  }
-
-  if (!passCodeToken.value) {
-    loadError.value = '缺少分享验证令牌'
-    diagnosticInfo.value = '请确认已输入提取码（如需要），或刷新页面后重试'
-    canRetry.value = true
-    emits('msg', loadError.value, 'error')
-    return
-  }
-
-  // 带重试的加载
-  const maxRetries = 5
-  let lastResult = null
-
-  for (let i = 0; i < maxRetries; i++) {
-    emits('msg', i === 0 ? '正在加载分享文件列表...' : `正在重试 (${i + 1}/${maxRetries})...`, 'info')
-    try {
-      lastResult = await getShareCurrentFiles()
-      if (lastResult.files.length > 0) {
-        list.value = lastResult.files.map(buildFileItem)
-        sortList()
-        emits('msg', `文件列表加载完成，共 ${list.value.length} 项`, 'success')
-        return
-      }
-    } catch (e) {
-      console.error('[pikpakHelpr] loadShareFileList retry failed:', e)
-      lastResult = { files: [], error: 'exception', message: e.message || '未知错误' }
-    }
-    if (i < maxRetries - 1) {
-      await new Promise(r => setTimeout(r, 800))
-    }
-  }
-
-  // 重试耗尽，使用诊断信息
-  if (lastResult?.error) {
-    loadError.value = '文件列表加载失败'
-    diagnosticInfo.value = lastResult.message || '未知错误'
-  } else {
-    loadError.value = '未找到文件'
-    diagnosticInfo.value = '页面数据已读取但未找到文件，可能是空文件夹或数据同步延迟'
-  }
-  canRetry.value = true
-  emits('msg', loadError.value, 'error')
-}
-
-// 加载普通页面文件列表
-const loadDriveFileList = async () => {
-  let parentId = window.location.href.split('/').pop()
-  if (parentId === 'all') parentId = ''
-
-  emits('msg', '开始加载文件列表，请稍等', 'info')
+  loading.value = true
+  emits('msg', `正在匹配 ${ids.length} 个选中项...`, 'info')
 
   try {
-    const res = await getList(parentId)
-    if (res?.files?.length > 0) {
-      list.value = res.files.map(buildFileItem)
-      sortList()
-      emits('msg', `文件列表加载完成，共 ${list.value.length} 项`, 'success')
+    let apiFiles = []
+
+    if (isSharePage()) {
+      // 分享页：使用 getShareCurrentFiles API
+      const res = await getShareCurrentFiles()
+      apiFiles = res.files || []
     } else {
-      loadError.value = '未找到文件'
-      diagnosticInfo.value = '当前目录可能为空，或文件列表获取失败'
-      canRetry.value = true
+      // 普通页：使用 getList API
+      let parentId = window.location.href.split('/').pop()
+      if (parentId === 'all') parentId = ''
+      const res = await getList(parentId)
+      apiFiles = res?.files || []
+    }
+
+    // 用 API 返回的文件列表匹配 selectedIds
+    const result = matchSelectedIds(ids, apiFiles)
+    selectedFiles.value = result.files
+    selectedFolders.value = result.folders
+    unmatchedIds.value = result.unmatched
+    totalSize.value = result.totalSize
+
+    // 分享页：如果有文件夹，递归获取子树并重新计算大小
+    if (isSharePage() && selectedFolders.value.length > 0) {
+      // 筛选出尚未缓存的新文件夹，增量获取
+      const newFolders = selectedFolders.value.filter(f => !shareFetchedFolderIds.has(f.id))
+      const allCached = newFolders.length === 0
+
+      if (!allCached) {
+        emits('msg', `正在扫描 ${newFolders.length} 个新文件夹（已缓存 ${selectedFolders.value.length - newFolders.length} 个）...`, 'info')
+        try {
+          await buildShareFileCache(newFolders)
+        } catch (e) {
+          console.error('[pikpakHelpr] buildShareFileCache failed:', e)
+        }
+      }
+
+      // 用缓存重新计算大小
+      const { total, folderSizes } = calcTotalSizeFromIndex(shareFileCache, ids, selectedFiles.value)
+      totalSize.value = total
+      for (const folder of selectedFolders.value) {
+        if (folderSizes[folder.id] !== undefined) {
+          folder._folderSize = folderSizes[folder.id]
+        }
+      }
+      emits('msg', `已匹配 ${selectedFiles.value.length} 个文件，${selectedFolders.value.length} 个文件夹${allCached ? '（缓存命中）' : ''}`, 'success')
+    } else if (result.files.length + result.folders.length > 0) {
+      emits('msg', `已匹配 ${result.files.length} 个文件，${result.folders.length} 个文件夹`, 'success')
     }
   } catch (e) {
-    loadError.value = '文件列表加载失败'
-    diagnosticInfo.value = `错误信息: ${e.message || '未知错误'}`
-    canRetry.value = true
-    emits('msg', loadError.value, 'error')
+    console.error('[pikpakHelpr] loadSelection failed:', e)
+    // API 失败时，所有 ID 作为 unmatched
+    unmatchedIds.value = [...ids]
+    emits('msg', `文件信息获取失败，将尝试直接推送 ${ids.length} 个选中项`, 'warning')
+  } finally {
+    loading.value = false
   }
 }
 
-const retryLoad = () => loadFileList()
+/**
+ * 根据 selectedIds 从 API 返回的文件列表中匹配详情
+ */
+const matchSelectedIds = (ids, apiFiles) => {
+  const idSet = new Set(ids)
+  const matchedFiles = []
+  const matchedFolders = []
+  const matchedIds = new Set()
+
+  for (const file of apiFiles) {
+    if (file.id && idSet.has(file.id) && !matchedIds.has(file.id)) {
+      matchedIds.add(file.id)
+      if (file.kind === 'drive#folder') {
+        matchedFolders.push(file)
+      } else {
+        matchedFiles.push(file)
+      }
+    }
+  }
+
+  // 计算总大小
+  let size = 0
+
+  if (isSharePage()) {
+    // 分享页：优先使用 Pinia selectedFilesSize
+    const shareStore = window.useNuxtApp()?.$pinia?.state?.value?.share
+    size = shareStore?.selectedFilesSize || 0
+  } else {
+    // 网盘页：使用 dbIndex 递归计算文件夹大小
+    const dbIndex = getDriveDbIndex()
+    if (dbIndex) {
+      const { total: dbTotal, folderSizes } = calcTotalSizeFromIndex(dbIndex, ids, matchedFiles)
+      size = dbTotal
+      // 将文件夹大小信息附加到 folder 对象上
+      for (const folder of matchedFolders) {
+        if (folderSizes[folder.id] !== undefined) {
+          folder._folderSize = folderSizes[folder.id]
+        }
+      }
+    }
+  }
+
+  // 兜底：累加文件 size
+  if (size <= 0) {
+    size = [...matchedFiles, ...matchedFolders].reduce((sum, f) => sum + (parseInt(f.size) || 0), 0)
+  }
+
+  const unmatched = ids.filter(id => !matchedIds.has(id))
+  return { files: matchedFiles, folders: matchedFolders, totalSize: size, unmatched }
+}
+
+/**
+ * 获取网盘页 Pinia fileStore.dbIndex
+ */
+const getDriveDbIndex = () => {
+  try {
+    const pinia = document.getElementById('app')?.__vue_app__
+      ?.config?.globalProperties?.$pinia
+    return pinia?.state?.value?.file?.dbIndex || null
+  } catch (e) {
+    return null
+  }
+}
+
+/**
+ * 分享页：增量递归获取文件夹子树，结果追加到 shareFileCache
+ * 已缓存的文件夹跳过，只获取新增的文件夹
+ */
+const buildShareFileCache = async (folders) => {
+  const queue = [...folders]
+
+  while (queue.length > 0) {
+    const folder = queue.shift()
+    // 同一个文件夹不重复调 API
+    if (shareFetchedFolderIds.has(folder.id)) continue
+    shareFetchedFolderIds.add(folder.id)
+
+    // 将文件夹自身加入缓存（如果尚未加入）
+    if (!shareCachedEntryIds.has(folder.id)) {
+      shareFileCache.push({
+        id: folder.id,
+        parent_id: folder.parent_id || '',
+        name: folder.name,
+        kind: folder.kind,
+        size: folder.size || '0'
+      })
+      shareCachedEntryIds.add(folder.id)
+    }
+
+    // 获取文件夹内容
+    try {
+      const res = await fetchShareFiles(shareId.value, folder.id, passCodeToken.value)
+      const files = res?.files || []
+      for (const file of files) {
+        if (!shareCachedEntryIds.has(file.id)) {
+          shareFileCache.push({
+            id: file.id,
+            parent_id: file.parent_id || folder.id,
+            name: file.name,
+            kind: file.kind,
+            size: file.size || '0'
+          })
+          shareCachedEntryIds.add(file.id)
+        }
+        // 子文件夹加入队列继续递归
+        if (file.kind === 'drive#folder' && !shareFetchedFolderIds.has(file.id)) {
+          queue.push(file)
+        }
+      }
+    } catch (e) {
+      console.error(`[pikpakHelpr] buildShareFileCache: failed for ${folder.name}:`, e)
+    }
+  }
+}
+
+/**
+ * 通用：从扁平化文件索引计算选中项的总大小
+ * 适用于网盘页 dbIndex 和分享页 shareFileCache
+ * - 普通文件直接取 size
+ * - 文件夹递归查找 parent_id 子树累加
+ * @returns {{ total: number, folderSizes: Record<string, number> }}
+ */
+const calcTotalSizeFromIndex = (fileIndex, selectedIds, matchedFiles) => {
+  // 构建 parent_id 索引
+  const byParent = {}
+  const byId = {}
+  for (const entry of fileIndex) {
+    byId[entry.id] = entry
+    const pid = entry.parent_id || ''
+    if (!byParent[pid]) byParent[pid] = []
+    byParent[pid].push(entry)
+  }
+
+  // BFS 递归计算文件夹大小
+  const calcFolderSize = (folderId) => {
+    let total = 0
+    const queue = [folderId]
+    const visited = new Set()
+    while (queue.length > 0) {
+      const pid = queue.shift()
+      if (visited.has(pid)) continue
+      visited.add(pid)
+      const children = byParent[pid] || []
+      for (const child of children) {
+        if (child.kind === 'drive#folder') {
+          queue.push(child.id)
+        } else {
+          total += parseInt(child.size) || 0
+        }
+      }
+    }
+    return total
+  }
+
+  // 选中项中普通文件的 size 直接累加
+  let totalSize = matchedFiles.reduce((sum, f) => sum + (parseInt(f.size) || 0), 0)
+  const folderSizes = {}
+
+  // 选中项中的文件夹：递归累加子文件大小
+  const selectedIdSet = new Set(selectedIds)
+  for (const id of selectedIdSet) {
+    const entry = byId[id]
+    if (!entry || entry.kind !== 'drive#folder') continue
+    const fs = calcFolderSize(id)
+    folderSizes[id] = fs
+    totalSize += fs
+  }
+
+  return { total: totalSize, folderSizes }
+}
 
 const close = () => {
-  selected.value = []
-  checkedAll.value = false
-  isForbidden.value = false
   emits('close')
 }
 
 const openConfig = () => emits('openConfig')
 
-// 选择
-const onCheckAll = () => {
-  selected.value = checkedAll.value ? list.value.map((_, index) => index) : []
-}
-const onCheck = () => {
-  checkedAll.value = selected.value.length === list.value.length
-}
-
-const sortList = () => {
-  list.value.sort((a, b) => {
-    // 文件夹优先
-    if (a.type === 'drive#folder' && b.type !== 'drive#folder') return -1
-    if (a.type !== 'drive#folder' && b.type === 'drive#folder') return 1
-
-    let aValue = a[sortBy.value]
-    let bValue = b[sortBy.value]
-
-    if (sortBy.value === 'size') {
-      aValue = parseInt(aValue)
-      bValue = parseInt(bValue)
-    } else if (sortBy.value === 'created_time' || sortBy.value === 'modified_time') {
-      aValue = new Date(aValue).getTime()
-      bValue = new Date(bValue).getTime()
-    }
-
-    const comparison = aValue > bValue ? 1 : aValue < bValue ? -1 : 0
-    return sortDirection.value === 'asc' ? comparison : -comparison
-  })
-  updateSelectedIndices()
-}
-
-const updateSelectedIndices = () => {
-  const currentlySelectedIds = new Set(selected.value.map(index => list.value[index].id))
-  selected.value = []
-  list.value.forEach((item, index) => {
-    if (currentlySelectedIds.has(item.id)) selected.value.push(index)
-  })
-}
-
 // 递归获取所有选中文件（展开文件夹）
 const getAllList = async () => {
   emits('msg', '开始获取文件内容', 'info')
-  const initialSelectedItems = selected.value.map(index => list.value[index])
   const allFiles = []
   const foldersToProcess = []
 
-  initialSelectedItems.forEach(item => {
-    if (item.type === 'drive#folder') {
-      foldersToProcess.push({ id: item.id, name: item.name, path: item.name })
-    } else {
-      allFiles.push({ ...item, path: '' })
+  // 直接使用选中的文件
+  selectedFiles.value.forEach(file => {
+    allFiles.push({ ...file, path: '' })
+  })
+
+  // 未匹配到详情的 ID 也加入（作为文件尝试下载）
+  unmatchedIds.value.forEach(id => {
+    allFiles.push({ id, name: id, path: '' })
+  })
+
+  // 分享页：如果有缓存，优先使用缓存数据
+  if (isSharePage() && shareFileCache.length > 0 && selectedFolders.value.length > 0) {
+    // 构建 parent_id 索引
+    const byParent = {}
+    for (const entry of shareFileCache) {
+      const pid = entry.parent_id || ''
+      if (!byParent[pid]) byParent[pid] = []
+      byParent[pid].push(entry)
     }
+
+    // 从缓存的 byParent 索引中递归获取路径信息
+    const collectWithPath = (parentId, path) => {
+      const children = byParent[parentId] || []
+      for (const child of children) {
+        if (child.kind === 'drive#folder') {
+          collectWithPath(child.id, `${path}/${child.name}`)
+        } else {
+          allFiles.push({ ...child, path })
+        }
+      }
+    }
+
+    for (const folder of selectedFolders.value) {
+      collectWithPath(folder.id, folder.name)
+    }
+
+    emits('msg', `文件获取完毕（缓存命中），共 ${allFiles.length} 个文件`, 'success')
+    return allFiles
+  }
+
+  // 无缓存：走原有递归逻辑
+  selectedFolders.value.forEach(folder => {
+    foldersToProcess.push({ id: folder.id, name: folder.name, path: folder.name })
   })
 
   let processedCount = 0
@@ -334,26 +486,30 @@ const getAllList = async () => {
     }
   }
 
-  selectedItems.value = allFiles
-  emits('msg', `文件获取完毕，共${allFiles.length}个文件。`, 'success')
+  emits('msg', `文件获取完毕，共 ${allFiles.length} 个文件`, 'success')
+  return allFiles
 }
 
 const pushBefore = async () => {
-  if (isForbidden.value) {
+  if (isPushing.value) {
     emits('msg', '已经开始推送了', 'warning')
     return
   }
-  isForbidden.value = true
-  await getAllList()
-  push()
+  isPushing.value = true
+
+  try {
+    const allFiles = await getAllList()
+    await push(allFiles)
+  } finally {
+    isPushing.value = false
+  }
 }
 
-const push = async () => {
+const push = async (items) => {
   const { host: ariaHost, path: ariaPath, token: ariaToken, params: customParams } = getAriaConfig()
 
   if (!ariaHost) {
     emits('msg', '请先配置aria2', 'error')
-    close()
     return
   }
 
@@ -361,18 +517,18 @@ const push = async () => {
   let fail = 0
   let errorMSG = ''
 
-  console.log(`[pikpakHelpr] 共${selectedItems.value.length}个项目`)
+  console.log(`[pikpakHelpr] 共${items.length}个项目`)
 
   // 并发 Worker 池处理
   const MAX_CONCURRENT = 5
-  const items = [...selectedItems.value]
+  const queue = [...items]
   let currentIndex = 0
 
   const processOne = async () => {
-    while (currentIndex < items.length) {
+    while (currentIndex < queue.length) {
       const i = currentIndex++
-      const item = items[i]
-      console.log(`[pikpakHelpr] 处理第${i + 1}/${items.length}个项目: ${item.name}`)
+      const item = queue[i]
+      console.log(`[pikpakHelpr] 处理第${i + 1}/${queue.length}个项目: ${item.name}`)
       emits('msg', `正在处理: ${item.name}`, 'info')
 
       try {
@@ -439,149 +595,129 @@ onMounted(() => setTimeout(handleTestConnection, 1000))
 </script>
 
 <style scoped>
-/* 工具栏 */
-.toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
+/* 选中摘要 */
+.summary {
+  margin-bottom: 16px;
   padding: 16px 20px;
   background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.05) 100%);
   border-radius: 12px;
   border: 1px solid rgba(99, 102, 241, 0.1);
 }
 
-.toolbar input[type="checkbox"] {
-  margin-right: 8px;
-  transform: scale(1.3);
-  accent-color: #6366f1;
-}
-
-.toolbar label {
-  font-weight: 600;
-  color: #374151;
+.summary-stats {
   display: flex;
-  align-items: center;
-  cursor: pointer;
-  transition: color 0.2s ease;
-}
-
-.toolbar label:hover {
-  color: #6366f1;
-}
-
-/* 排序选项 */
-.sort-options {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 
-.sort-options label {
-  font-size: 14px;
-  font-weight: 500;
+.stat-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.folder-badge {
+  background: rgba(251, 191, 36, 0.15);
+  color: #b45309;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.file-badge {
+  background: rgba(99, 102, 241, 0.1);
+  color: #4f46e5;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.unknown-badge {
+  background: rgba(107, 114, 128, 0.1);
   color: #6b7280;
+  border: 1px solid rgba(107, 114, 128, 0.2);
 }
 
-.sort-options select {
-  padding: 8px 12px;
-  border: 2px solid #e5e7eb;
-  background: white;
-  color: #374151;
-  border-radius: 8px;
+.summary-size {
   font-size: 14px;
-  transition: all 0.2s ease;
-  cursor: pointer;
-}
-
-.sort-options select:focus {
-  outline: none;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-}
-
-.sort-options select:hover {
-  border-color: #9ca3af;
+  color: #6b7280;
+  font-weight: 500;
 }
 
 /* 文件列表 */
-.movies {
-  margin-top: 16px;
+.file-list {
   flex: 1;
-  min-height: 200px;
+  min-height: 80px;
+  max-height: 350px;
   overflow-y: auto;
   overflow-x: hidden;
   border: 2px solid #f1f5f9;
   border-radius: 16px;
   padding: 0;
+  margin: 0;
   background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.06);
+  list-style: none;
 }
 
-.movies::-webkit-scrollbar {
+.file-list::-webkit-scrollbar {
   width: 8px;
 }
 
-.movies::-webkit-scrollbar-track {
+.file-list::-webkit-scrollbar-track {
   background: #f1f5f9;
   border-radius: 8px;
 }
 
-.movies::-webkit-scrollbar-thumb {
+.file-list::-webkit-scrollbar-thumb {
   background: linear-gradient(135deg, #cbd5e1 0%, #94a3b8 100%);
   border-radius: 8px;
-  transition: background 0.2s ease;
 }
 
-.movies::-webkit-scrollbar-thumb:hover {
+.file-list::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
 }
 
 /* 文件列表项 */
-.movies li {
+.file-item {
   display: flex;
   align-items: center;
-  padding: 16px 20px;
+  padding: 12px 20px;
   border-bottom: 1px solid rgba(226, 232, 240, 0.6);
   font-size: 14px;
   color: #334155;
-  transition: all 0.2s ease;
-  cursor: pointer;
-  margin-right: -4px;
-  overflow: hidden;
+  transition: background 0.2s ease;
 }
 
-.movies li:hover {
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.05) 100%);
-  transform: translateX(4px);
-  margin-right: 0;
-}
-
-.movies li:last-child {
+.file-item:last-child {
   border-bottom: none;
 }
 
-.movies li input[type="checkbox"] {
-  margin-right: 16px;
-  transform: scale(1.2);
-  accent-color: #6366f1;
+.file-item:hover {
+  background: rgba(99, 102, 241, 0.03);
 }
 
-.movies li .icon {
+.file-item .icon {
   margin-right: 12px;
-  font-size: 1.5em;
+  font-size: 1.4em;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.1));
+  flex-shrink: 0;
 }
 
-.movies li .file-name {
+.file-item .file-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex-grow: 1;
 }
 
-.movies li .file-info {
+.file-item .unknown-name {
+  color: #9ca3af;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.file-item .file-size {
   margin-left: auto;
   color: #64748b;
   font-size: 12px;
@@ -591,38 +727,58 @@ onMounted(() => setTimeout(handleTestConnection, 1000))
   border-radius: 6px;
   border: 1px solid rgba(226, 232, 240, 0.5);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 30%;
+  flex-shrink: 0;
 }
 
-/* 响应式 */
-@media (max-width: 768px) {
-  .toolbar {
-    flex-direction: column;
-    gap: 12px;
-    align-items: stretch;
-  }
-
-  .sort-options {
-    flex-direction: column;
-    gap: 8px;
-    width: 100%;
-  }
-
-  .sort-options select {
-    width: 100%;
-    box-sizing: border-box;
-  }
+.file-item .file-tag {
+  margin-left: auto;
+  color: #92400e;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  background: rgba(251, 191, 36, 0.1);
+  border-radius: 12px;
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-@media (max-width: 480px) {
-  .movies {
-    min-height: 150px;
-  }
+.file-item .unknown-tag {
+  color: #6b7280;
+  background: rgba(107, 114, 128, 0.08);
+  border-color: rgba(107, 114, 128, 0.15);
 }
 
-/* 空状态 / 加载状态 */
+.folder-item {
+  background: rgba(251, 191, 36, 0.02);
+}
+
+.folder-size {
+  color: #b45309 !important;
+  background: rgba(251, 191, 36, 0.08) !important;
+  border-color: rgba(251, 191, 36, 0.2) !important;
+}
+
+.unmatched-item {
+  background: rgba(107, 114, 128, 0.02);
+}
+
+/* 加载动画 */
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 空状态 */
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -630,11 +786,10 @@ onMounted(() => setTimeout(handleTestConnection, 1000))
   justify-content: center;
   min-height: 200px;
   padding: 32px 20px;
-  margin-top: 16px;
-  border: 2px solid #f1f5f9;
+  margin-bottom: 16px;
+  border: 2px dashed #e2e8f0;
   border-radius: 16px;
   background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.06);
 }
 
 .empty-icon {
@@ -651,53 +806,25 @@ onMounted(() => setTimeout(handleTestConnection, 1000))
   margin-bottom: 8px;
 }
 
-.empty-detail {
-  font-size: 13px;
+.empty-guide {
+  font-size: 14px;
   color: #6b7280;
   text-align: center;
-  max-width: 360px;
+  max-width: 320px;
   line-height: 1.6;
-  padding: 8px 16px;
-  background: #fef3c7;
-  border-radius: 8px;
-  border: 1px solid #fde68a;
-  margin-bottom: 16px;
 }
 
-.retry-btn {
-  padding: 8px 24px;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+/* 响应式 */
+@media (max-width: 768px) {
+  .summary-stats {
+    flex-direction: column;
+    gap: 6px;
+  }
 }
 
-.retry-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
-}
-
-.retry-btn:active {
-  transform: translateY(0);
-}
-
-/* 加载动画 */
-.loading-spinner {
-  width: 36px;
-  height: 36px;
-  border: 3px solid #e5e7eb;
-  border-top-color: #6366f1;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin-bottom: 16px;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
+@media (max-width: 480px) {
+  .file-list {
+    min-height: 60px;
+  }
 }
 </style>
