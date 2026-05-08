@@ -7,62 +7,82 @@
 
       <!-- 中间可滚动内容区 -->
       <div class="dialog-body">
-        <!-- 加载中 -->
-        <div v-if="loading" class="empty-state">
-          <div class="loading-spinner"></div>
-          <div class="empty-title">正在获取文件信息...</div>
+        <!-- 进度模式（扫描/推送中） -->
+        <div v-if="progress.show" class="progress-section">
+          <div class="progress-icon">
+            <div class="loading-spinner"></div>
+          </div>
+          <div class="progress-title">{{ progress.mode === 'scan' ? '正在扫描文件...' : '正在推送文件...' }}</div>
+          <div v-if="progress.mode === 'push'" class="progress-bar-track">
+            <div class="progress-bar-fill" :style="{ width: progressPercent + '%' }"></div>
+          </div>
+          <div v-if="progress.mode === 'push'" class="progress-stats">
+            <span class="stat-progress">{{ progress.current }}/{{ progress.total }}</span>
+            <span class="stat-pct">{{ progressPercent }}%</span>
+            <span class="stat-result">✅ {{ progress.success }}  ❌ {{ progress.fail }}</span>
+          </div>
+          <div class="progress-detail">{{ progress.text }}</div>
         </div>
 
-        <!-- 有选择内容 -->
-        <template v-else-if="hasSelection">
-          <!-- 选中摘要 -->
-          <div class="summary">
-            <div class="summary-stats">
-              <span v-if="selectedFolders.length > 0" class="stat-badge folder-badge">
-                {{ selectedFolders.length }} 个文件夹
-              </span>
-              <span v-if="selectedFiles.length > 0" class="stat-badge file-badge">
-                {{ selectedFiles.length }} 个文件
-              </span>
-              <span v-if="unmatchedIds.length > 0" class="stat-badge unknown-badge">
-                {{ unmatchedIds.length }} 个未知
-              </span>
-            </div>
-            <div v-if="totalSize > 0" class="summary-size">
-              预估大小：{{ formatBytes(totalSize) }}
-            </div>
+        <!-- 正常显示模式 -->
+        <template v-else>
+          <!-- 加载中 -->
+          <div v-if="loading" class="empty-state">
+            <div class="loading-spinner"></div>
+            <div class="empty-title">正在获取文件信息...</div>
           </div>
 
-          <!-- 文件列表（只读展示） -->
-          <ul class="file-list">
-            <!-- 文件夹 -->
-            <li v-for="item in selectedFolders" :key="item.id" class="file-item folder-item">
-              <span class="icon">📁</span>
-              <span class="file-name">{{ item.name }}</span>
-              <span v-if="item._folderSize" class="file-size folder-size">{{ formatBytes(item._folderSize) }}</span>
-              <span v-else class="file-tag">文件夹</span>
-            </li>
-            <!-- 文件 -->
-            <li v-for="item in selectedFiles" :key="item.id" class="file-item">
-              <span class="icon">📄</span>
-              <span class="file-name">{{ item.name }}</span>
-              <span class="file-size">{{ item.size ? formatBytes(parseInt(item.size)) : '' }}</span>
-            </li>
-            <!-- 未匹配到的 ID -->
-            <li v-for="id in unmatchedIds" :key="id" class="file-item unmatched-item">
-              <span class="icon">❓</span>
-              <span class="file-name unknown-name">{{ id }}</span>
-              <span class="file-tag unknown-tag">未匹配详情</span>
-            </li>
-          </ul>
-        </template>
+          <!-- 有选择内容 -->
+          <template v-else-if="hasSelection">
+            <!-- 选中摘要 -->
+            <div class="summary">
+              <div class="summary-stats">
+                <span v-if="selectedFolders.length > 0" class="stat-badge folder-badge">
+                  {{ selectedFolders.length }} 个文件夹
+                </span>
+                <span v-if="selectedFiles.length > 0" class="stat-badge file-badge">
+                  {{ selectedFiles.length }} 个文件
+                </span>
+                <span v-if="unmatchedIds.length > 0" class="stat-badge unknown-badge">
+                  {{ unmatchedIds.length }} 个未知
+                </span>
+              </div>
+              <div v-if="totalSize > 0" class="summary-size">
+                预估大小：{{ formatBytes(totalSize) }}
+              </div>
+            </div>
 
-        <!-- 无选择内容 -->
-        <div v-else class="empty-state">
-          <div class="empty-icon">📂</div>
-          <div class="empty-title">未选择文件</div>
-          <div class="empty-guide">请先在页面上勾选要下载的文件或文件夹，然后再点击推送按钮</div>
-        </div>
+            <!-- 文件列表（只读展示） -->
+            <ul class="file-list">
+              <!-- 文件夹 -->
+              <li v-for="item in selectedFolders" :key="item.id" class="file-item folder-item">
+                <span class="icon">📁</span>
+                <span class="file-name">{{ item.name }}</span>
+                <span v-if="item._folderSize" class="file-size folder-size">{{ formatBytes(item._folderSize) }}</span>
+                <span v-else class="file-tag">文件夹</span>
+              </li>
+              <!-- 文件 -->
+              <li v-for="item in selectedFiles" :key="item.id" class="file-item">
+                <span class="icon">📄</span>
+                <span class="file-name">{{ item.name }}</span>
+                <span class="file-size">{{ item.size ? formatBytes(parseInt(item.size)) : '' }}</span>
+              </li>
+              <!-- 未匹配到的 ID -->
+              <li v-for="id in unmatchedIds" :key="id" class="file-item unmatched-item">
+                <span class="icon">❓</span>
+                <span class="file-name unknown-name">{{ id }}</span>
+                <span class="file-tag unknown-tag">未匹配详情</span>
+              </li>
+            </ul>
+          </template>
+
+          <!-- 无选择内容 -->
+          <div v-else class="empty-state">
+            <div class="empty-icon">📂</div>
+            <div class="empty-title">未选择文件</div>
+            <div class="empty-guide">请先在页面上勾选要下载的文件或文件夹，然后再点击推送按钮</div>
+          </div>
+        </template>
       </div>
 
       <!-- aria2连接状态显示 -->
@@ -90,7 +110,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, reactive, watch, onMounted } from 'vue'
 import { getDownload, pushToAria, getList, getShareCurrentFiles, fetchShareFiles, getShareFolderDetail } from '../api'
 import { isSharePage, getShareId, getSharePageData, getSelectedIds } from '../utils/index.js'
 import { formatBytes } from '../utils/format.js'
@@ -107,6 +127,22 @@ const unmatchedIds = ref([])
 const totalSize = ref(0)
 const isPushing = ref(false)
 const loading = ref(false)
+
+// 进度状态（扫描/推送阶段）
+const progress = reactive({
+  show: false,
+  mode: '',      // 'scan' | 'push'
+  current: 0,
+  total: 0,
+  success: 0,
+  fail: 0,
+  text: ''
+})
+
+const progressPercent = computed(() => {
+  if (progress.total === 0) return 0
+  return Math.round((progress.current / progress.total) * 100)
+})
 
 // 分享页状态
 const shareId = ref('')
@@ -413,6 +449,11 @@ const getAllList = async () => {
 
   // 分享页：如果有缓存，优先使用缓存数据
   if (isSharePage() && shareFileCache.length > 0 && selectedFolders.value.length > 0) {
+    progress.mode = 'scan'
+    progress.total = selectedFolders.value.length
+    progress.current = 0
+    progress.text = '正在从缓存读取...'
+
     // 构建 parent_id 索引
     const byParent = {}
     for (const entry of shareFileCache) {
@@ -434,10 +475,13 @@ const getAllList = async () => {
     }
 
     for (const folder of selectedFolders.value) {
+      progress.current++
+      progress.text = `缓存读取: ${folder.name}`
       collectWithPath(folder.id, folder.name)
     }
 
     emits('msg', `文件获取完毕（缓存命中），共 ${allFiles.length} 个文件`, 'success')
+    progress.show = false
     return allFiles
   }
 
@@ -446,11 +490,16 @@ const getAllList = async () => {
     foldersToProcess.push({ id: folder.id, name: folder.name, path: folder.name })
   })
 
+  // 初始化扫描进度：按初始队列 + 已缓存直接文件数
+  progress.total = foldersToProcess.length
+  progress.text = `开始扫描 ${foldersToProcess.length} 个文件夹...`
+
   let processedCount = 0
   while (foldersToProcess.length > 0) {
     const currentFolder = foldersToProcess.shift()
     processedCount++
-    emits('msg', `正在扫描第 ${processedCount} 个文件夹: ${currentFolder.name}`, 'info')
+    progress.current = processedCount
+    progress.text = `正在扫描: ${currentFolder.name}`
 
     try {
       let result = null
@@ -502,10 +551,25 @@ const pushBefore = async () => {
   }
   isPushing.value = true
 
+  // 启动进度显示
+  progress.show = true
+  progress.mode = 'scan'
+  progress.current = 0
+  progress.total = 0
+  progress.success = 0
+  progress.fail = 0
+  progress.text = '准备扫描文件...'
+
   try {
     const allFiles = await getAllList()
-    await push(allFiles)
+    if (allFiles.length > 0) {
+      await push(allFiles)
+    } else {
+      progress.show = false
+      emits('msg', '没有可推送的文件', 'warning')
+    }
   } finally {
+    progress.show = false
     isPushing.value = false
   }
 }
@@ -515,34 +579,40 @@ const push = async (items) => {
 
   if (!ariaHost) {
     emits('msg', '请先配置aria2', 'error')
+    progress.show = false
     return
   }
 
-  let success = 0
-  let fail = 0
-  let errorMSG = ''
+  // 切换到推送进度模式
+  progress.show = true
+  progress.mode = 'push'
+  progress.current = 0
+  progress.total = items.length
+  progress.success = 0
+  progress.fail = 0
+  progress.text = `开始推送 ${items.length} 个文件...`
 
   console.log(`[pikpakHelpr] 共${items.length}个项目`)
 
   // 并发 Worker 池处理
-  const MAX_CONCURRENT = 5
+  const MAX_CONCURRENT = 15
   const queue = [...items]
   let currentIndex = 0
+  let errorMSG = ''
 
   const processOne = async () => {
     while (currentIndex < queue.length) {
       const i = currentIndex++
       const item = queue[i]
-      console.log(`[pikpakHelpr] 处理第${i + 1}/${queue.length}个项目: ${item.name}`)
-      emits('msg', `正在处理: ${item.name}`, 'info')
+      progress.current = i + 1
+      progress.text = `正在处理: ${item.name}`
 
       try {
         const res = await getDownload(item.id)
 
         if (res.error_description) {
-          console.error(`[pikpakHelpr] 第${i + 1}个项目下载链接获取失败:`, res.error_description)
-          emits('msg', `失败: ${item.name} - ${res.error_description}`, 'error')
-          fail++
+          progress.fail++
+          progress.text = `获取链接失败: ${item.name} - ${res.error_description}`
           continue
         }
 
@@ -571,16 +641,15 @@ const push = async (items) => {
         const resoj = typeof ariares === 'string' ? JSON.parse(ariares) : ariares
 
         if (resoj.result) {
-          success++
+          progress.success++
         } else {
           errorMSG = resoj.error?.message === 'Unauthorized' ? '密钥不对' : (resoj.error?.message || '推送失败')
-          fail++
-          emits('msg', `推送失败: ${item.name} - ${errorMSG}`, 'error')
+          progress.fail++
+          progress.text = `推送失败: ${item.name}`
         }
       } catch (e) {
-        console.error(`[pikpakHelpr] 第${i + 1}个项目处理失败:`, e)
-        emits('msg', `处理失败: ${item.name} - ${e.message || '未知错误'}`, 'error')
-        fail++
+        progress.fail++
+        progress.text = `处理失败: ${item.name} - ${e.message || '未知错误'}`
         errorMSG = e.message
       }
     }
@@ -589,9 +658,9 @@ const push = async (items) => {
   const workers = Array.from({ length: MAX_CONCURRENT }, () => processOne())
   await Promise.all(workers)
 
-  const resultType = fail === 0 ? 'success' : (success === 0 ? 'error' : 'warning')
-  emits('msg', `推送完成 - 成功: ${success}, 失败: ${fail}${fail ? ' (' + errorMSG + ')' : ''}`, resultType)
-  console.info(`[pikpakHelpr] 推送完成 - 成功: ${success}, 失败: ${fail}`)
+  const resultType = progress.fail === 0 ? 'success' : (progress.success === 0 ? 'error' : 'warning')
+  emits('msg', `推送完成 - 成功: ${progress.success}, 失败: ${progress.fail}${progress.fail ? ' (' + errorMSG + ')' : ''}`, resultType)
+  console.info(`[pikpakHelpr] 推送完成 - 成功: ${progress.success}, 失败: ${progress.fail}`)
 
   close()
 }
@@ -820,6 +889,80 @@ onMounted(() => setTimeout(handleTestConnection, 1000))
   text-align: center;
   max-width: 320px;
   line-height: 1.6;
+}
+
+/* 进度条区域 */
+.progress-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  padding: 32px 20px;
+}
+
+.progress-icon {
+  margin-bottom: 16px;
+}
+
+.progress-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 20px;
+}
+
+.progress-bar-track {
+  width: 100%;
+  max-width: 400px;
+  height: 10px;
+  background: #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 10px;
+  transition: width 0.3s ease;
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+}
+
+.progress-stats {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  font-size: 14px;
+  color: #475569;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.progress-stats .stat-progress {
+  font-weight: 700;
+  color: #4f46e5;
+}
+
+.progress-stats .stat-pct {
+  font-weight: 600;
+  color: #6366f1;
+}
+
+.progress-stats .stat-result {
+  font-size: 13px;
+}
+
+.progress-detail {
+  font-size: 13px;
+  color: #64748b;
+  max-width: 360px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 响应式 */
