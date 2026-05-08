@@ -1,3 +1,5 @@
+import { unsafeWindow } from '$'
+
 // ── 页面检测工具函数 ──
 
 export function isSharePage() {
@@ -10,7 +12,7 @@ export function getShareId() {
 
 export function getSharePageData() {
   try {
-    const nuxt = window.useNuxtApp()
+    const nuxt = unsafeWindow.useNuxtApp()
     if (nuxt?.$pinia?.state) {
       const state = nuxt.$pinia.state.value
       if (state?.share) return state.share
@@ -37,7 +39,7 @@ export function isPluginPage() {
  */
 export function getSelectedIds() {
   if (isSharePage()) {
-    const shareStore = window.useNuxtApp()?.$pinia?.state?.value?.share
+    const shareStore = unsafeWindow.useNuxtApp()?.$pinia?.state?.value?.share
     return shareStore?.selectedIds || []
   }
   // 普通页面
@@ -65,7 +67,7 @@ export function getSelectedFileDetails() {
   const matchedIds = new Set()
 
   if (isSharePage()) {
-    const shareStore = window.useNuxtApp()?.$pinia?.state?.value?.share
+    const shareStore = unsafeWindow.useNuxtApp()?.$pinia?.state?.value?.share
     if (shareStore) {
       // 从 curDirFiles 匹配
       const curDir = shareStore.curDirFiles

@@ -111,6 +111,7 @@
 
 <script setup>
 import { ref, computed, reactive, watch, onMounted } from 'vue'
+import { unsafeWindow } from '$'
 import { getDownload, pushToAria, getList, getShareCurrentFiles, fetchShareFiles, getShareFolderDetail } from '../api'
 import { isSharePage, getShareId, getSharePageData, getSelectedIds } from '../utils/index.js'
 import { formatBytes } from '../utils/format.js'
@@ -279,7 +280,7 @@ const matchSelectedIds = (ids, apiFiles) => {
 
   if (isSharePage()) {
     // 分享页：优先使用 Pinia selectedFilesSize
-    const shareStore = window.useNuxtApp()?.$pinia?.state?.value?.share
+    const shareStore = unsafeWindow.useNuxtApp()?.$pinia?.state?.value?.share
     size = shareStore?.selectedFilesSize || 0
   } else {
     // 网盘页：使用 dbIndex 递归计算文件夹大小
