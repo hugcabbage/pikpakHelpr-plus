@@ -74,10 +74,7 @@ const save = () => {
   close()
 }
 
-// 挂载时自动测试连接
-onMounted(() => {
-  if (form.host) handleTestConnection()
-})
+// 不在挂载时自动测试连接，用户可点击“测试连接”按钮进行检测
 </script>
 
 <style scoped>

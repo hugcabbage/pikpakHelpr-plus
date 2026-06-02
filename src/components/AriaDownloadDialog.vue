@@ -164,15 +164,16 @@ const hasSelection = computed(() =>
 )
 
 // Aria2 连接状态（composable）
-const { connectionStatus, isTestingConnection, testConnection } = useAria2Connection(emits)
+const { connectionState, connectionStatus, isTestingConnection, testConnection } = useAria2Connection(emits)
 const handleTestConnection = () => testConnection()
 
+// 不在打开对话时自动检测连接，改为在用户点击“推送到aria2”时检测
+// 但仍需在对话打开时加载当前页面的选中项以正确显示
 watch(
   () => props.show,
   (val) => {
     if (!val) return
     loadSelection()
-    setTimeout(handleTestConnection, 500)
   }
 )
 
@@ -585,6 +586,14 @@ const push = async (items) => {
     return
   }
 
+  // 在用户执行推送前先检测 Aria2 连接，若不通则取消推送并提示
+  await testConnection(ariaHost, ariaToken)
+  if (connectionState.value !== 'connected') {
+    emits('msg', 'Aria2 未连接，已取消推送', 'error')
+    progress.show = false
+    return
+  }
+
   // 切换到推送进度模式
   progress.show = true
   progress.mode = 'push'
@@ -667,7 +676,7 @@ const push = async (items) => {
   close()
 }
 
-onMounted(() => setTimeout(handleTestConnection, 1000))
+// 不在组件挂载时自动测试连接，用户可手动点击“测试连接”或在推送前自动检测
 
 // 复制原画链接功能
 const copyOriginLinks = async () => {
@@ -678,46 +687,40 @@ const copyOriginLinks = async () => {
       return
     }
 
-    emits('msg', '开始获取原画链接')
     const copiedList = []
     let failCount = 0
-    let idx = 0
 
-    for (const item of allFiles) {
+    for (let i = 0; i < allFiles.length; i++) {
+      const item = allFiles[i]
       try {
         // eslint-disable-next-line no-await-in-loop
         const res = await getDownload(item.id)
         if (res.error_description) {
-          emits('msg', `失败原因: ${res.error_description} 请刷新！`, 'error')
+          emits('msg', `第${i + 1}个文件获取失败：${res.error_description}，请刷新！`, 'error')
           failCount++
-          idx++
           continue
         }
 
         const originMedia = (res.medias || []).find(m => (m.media_name === '原画') && m.link && m.link.url)
         if (!originMedia) {
-          emits('msg', `第${idx + 1}个项目未找到原画链接`, 'error')
+          emits('msg', `第${i + 1}个文件未找到原画链接`, 'error')
           failCount++
-          idx++
           continue
         }
 
         copiedList.push(`${res.name}$${originMedia.link.url}`)
-        emits('msg', `第${idx + 1}个项目原画链接获取成功`, 'success')
+        emits('msg', `第${i + 1}个文件原画链接获取成功`, 'success')
       } catch (e) {
-        emits('msg', `第${idx + 1}个项目原画链接获取失败`, 'error')
+        emits('msg', `第${i + 1}个文件原画链接获取失败: ${e.message || '未知错误'}`, 'error')
         failCount++
-      } finally {
-        idx++
       }
     }
 
     if (copiedList.length > 0) {
       try {
         await navigator.clipboard.writeText(copiedList.join('\n'))
-        emits('msg', `已复制${copiedList.length}个原画链接到剪切板${failCount > 0 ? `，失败${failCount}个` : ''}`, 'success')
       } catch (e) {
-        emits('msg', '复制到剪切板失败，请手动复制', 'error')
+        emits('msg', '写入到剪切板失败，请手动复制', 'error')
       }
     } else {
       emits('msg', '未能获取到任何原画链接', 'warning')
