@@ -103,6 +103,7 @@
         <div v-if="hasSelection" class="btn el-button el-button--primary" @click="pushBefore" :disabled="isPushing">
           <span class="lbl-d">{{ isPushing ? '推送中...' : '推送到aria2' }}</span><span class="lbl-m">{{ isPushing ? '推送中...' : '推送' }}</span>
         </div>
+        <div v-if="hasSelection" class="btn el-button el-button--primary" @click="copyOriginLinks">复制原画链接</div>
         <div v-else class="btn el-button el-button--primary" @click="close">关闭</div>
       </div>
     </div>
@@ -667,6 +668,65 @@ const push = async (items) => {
 }
 
 onMounted(() => setTimeout(handleTestConnection, 1000))
+
+// 复制原画链接功能
+const copyOriginLinks = async () => {
+  try {
+    const allFiles = await getAllList()
+    if (!allFiles || allFiles.length === 0) {
+      emits('msg', '请先选择要复制的文件', 'warning')
+      return
+    }
+
+    emits('msg', '开始获取原画链接')
+    const copiedList = []
+    let failCount = 0
+    let idx = 0
+
+    for (const item of allFiles) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const res = await getDownload(item.id)
+        if (res.error_description) {
+          emits('msg', `失败原因: ${res.error_description} 请刷新！`, 'error')
+          failCount++
+          idx++
+          continue
+        }
+
+        const originMedia = (res.medias || []).find(m => (m.media_name === '原画') && m.link && m.link.url)
+        if (!originMedia) {
+          emits('msg', `第${idx + 1}个项目未找到原画链接`, 'error')
+          failCount++
+          idx++
+          continue
+        }
+
+        copiedList.push(`${res.name}$${originMedia.link.url}`)
+        emits('msg', `第${idx + 1}个项目原画链接获取成功`, 'success')
+      } catch (e) {
+        emits('msg', `第${idx + 1}个项目原画链接获取失败`, 'error')
+        failCount++
+      } finally {
+        idx++
+      }
+    }
+
+    if (copiedList.length > 0) {
+      try {
+        await navigator.clipboard.writeText(copiedList.join('\n'))
+        emits('msg', `已复制${copiedList.length}个原画链接到剪切板${failCount > 0 ? `，失败${failCount}个` : ''}`, 'success')
+      } catch (e) {
+        emits('msg', '复制到剪切板失败，请手动复制', 'error')
+      }
+    } else {
+      emits('msg', '未能获取到任何原画链接', 'warning')
+    }
+  } catch (e) {
+    console.error('[pikpakHelpr] copyOriginLinks failed:', e)
+    emits('msg', '获取文件列表失败，无法复制原画链接', 'error')
+  }
+}
 </script>
 
 <style scoped>
