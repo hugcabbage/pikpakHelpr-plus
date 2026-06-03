@@ -100,6 +100,9 @@
         <div class="btn el-button el-button--secondary" @click="openConfig">
           <span class="lbl-d">配置aria2</span><span class="lbl-m">配置</span>
         </div>
+        <div v-if="hasSelection" class="btn el-button el-button--primary" @click="copyLinksAsAria2cInput" :disabled="isCopying">
+          <span class="lbl-d">{{ isCopying ? '复制中...' : '复制aria2c参数' }}</span><span class="lbl-m">{{ isCopying ? '复制中...' : '复制' }}</span>
+        </div>
         <div v-if="hasSelection" class="btn el-button el-button--primary" @click="pushBefore" :disabled="isPushing">
           <span class="lbl-d">{{ isPushing ? '推送中...' : '推送到aria2' }}</span><span class="lbl-m">{{ isPushing ? '推送中...' : '推送' }}</span>
         </div>
@@ -127,6 +130,7 @@ const selectedFolders = ref([])
 const unmatchedIds = ref([])
 const totalSize = ref(0)
 const isPushing = ref(false)
+const isCopying = ref(false)
 const loading = ref(false)
 
 // 进度状态（扫描/推送阶段）
@@ -171,7 +175,7 @@ watch(
   (val) => {
     if (!val) return
     loadSelection()
-    setTimeout(handleTestConnection, 500)
+    // setTimeout(handleTestConnection, 500)
   }
 )
 
@@ -575,6 +579,104 @@ const pushBefore = async () => {
   }
 }
 
+const copyLinksAsAria2cInput = async () => {
+  if (!hasSelection.value) {
+    emits('msg', '未选择文件', 'warning')
+    return
+  }
+
+  emits('msg', '生成aria2c输入文件内容中...', 'info')
+  isCopying.value = true
+
+  let items = []
+  try {
+    items = await getAllList()
+  } catch (e) {
+    console.error('[pikpakHelpr] copyLinksAsAria2cInput getAllList failed:', e)
+    emits('msg', '获取文件列表失败', 'error')
+    return
+  }
+
+  const { params: customParams } = getAriaConfig()
+  const lines = []
+  let successCount = 0
+  let failCount = 0
+
+  for (const item of items) {
+    try {
+      const res = await getDownload(item.id)
+      if (res && res.error_description) {
+        failCount++
+        emits('msg', `获取下载项失败: ${item.name}`, 'warning')
+        continue
+      }
+
+      const url = res?.web_content_link || ''
+      if (!url) {
+        failCount++
+        emits('msg', `该下载项链接为空: ${item.name}`, 'warning')
+        continue
+      }
+
+      const opts = []
+      if (res.name) opts.push(`out=${res.name}`)
+
+      if (customParams) {
+        customParams.split(';').forEach(param => {
+          const [key, value] = param.split('=')
+          if (key && value) opts.push(`${key}=${value}`)
+        })
+      }
+
+      // 特殊情况：只有link和out时，合并为一行out$url
+      if (opts.length === 1 && opts[0].startsWith('out=')) {
+        const name = opts[0].slice(4)
+        lines.push(`${name}$${url}`)
+      } else if (opts.length === 0) {
+        // 仅url
+        lines.push(url)
+      } else {
+        // 标准格式：第一行链接，后续参数每行缩进两个空格
+        lines.push(url)
+        for (const opt of opts) {
+          lines.push(`  ${opt}`)
+        }
+      }
+
+      successCount++
+    } catch (e) {
+      failCount++
+      console.error('[pikpakHelpr] copyLinksAsAria2cInput getDownload failed:', e)
+      emits('msg', `处理失败: ${item.name}`, 'warning')
+    }
+  }
+
+  if (lines.length === 0) {
+    emits('msg', '无可用下载项', 'warning')
+    return
+  }
+
+  const text = lines.join('\n')
+  try {
+    if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      ta.remove()
+    }
+    emits('msg', `已写入${successCount}个下载项到剪贴板${failCount ? `，失败${failCount}个` : ''}`, 'success')
+  } catch (e) {
+    console.error('[pikpakHelpr] copy to clipboard failed:', e)
+    emits('msg', '写入剪贴板失败', 'error')
+  } finally {
+    isCopying.value = false
+  }
+}
+
 const push = async (items) => {
   const { host: ariaHost, path: ariaPath, token: ariaToken, params: customParams } = getAriaConfig()
 
@@ -666,7 +768,7 @@ const push = async (items) => {
   close()
 }
 
-onMounted(() => setTimeout(handleTestConnection, 1000))
+// onMounted(() => setTimeout(handleTestConnection, 1000))
 </script>
 
 <style scoped>
